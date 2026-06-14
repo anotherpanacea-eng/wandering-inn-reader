@@ -125,13 +125,32 @@ chapter titles, each tagged with the segment index it starts at). Pass that file
 `align.py --chapters` or `align_torch.py --chapters` and the reader gets chapter
 headers and a ☰ jump menu.
 
-**Which chapters?** Get the list from the Table of Contents
-(every chapter is a server-rendered link) or the book page for *The Witch of Webs*.
-One wrinkle worth knowing: the web serial is divided into **Volumes**, while the
-audiobook is a published **Book**, and the two don't map one-to-one (published
-books subdivide the big web volumes). So confirm exactly which chapters *The Witch
-of Webs* covers before fetching. The book page lists them; I can also extract that
-list for you in a follow-up.
+### Getting the chapter list automatically: `list_chapters.py`
+
+You no longer have to gather URLs by hand. `list_chapters.py` reads the live Table
+of Contents and emits a URL list for any **Volume** or any audiobook **Book**, now
+or in the future:
+
+```bash
+python3 list_chapters.py                          # all Volumes + chapter counts
+python3 list_chapters.py --volume 6 --list        # show one Volume's chapters
+python3 list_chapters.py --from 6.33 --to 6.47 --out book12_chapters.txt
+python3 fetch_text.py --url-file book12_chapters.txt --out book12   # then fetch
+```
+
+The web serial is grouped into **Volumes**; a published audiobook **Book** is a
+*slice* of a Volume. Because the TOC is in reading order, slicing between the first
+and last chapter also pulls in the **Interludes** that sit between numbered chapters
+— which a bare "6.33–6.47" number filter would miss. `--from`/`--to` match the URL
+slug and are inclusive.
+
+**Which chapters is *The Witch of Webs* (Book 12)?** Resolved: web chapters
+**6.33 E → 6.47 E** (Volume 6), which is **19 chapters** once the four interludes
+(Numbtongue Pt.1 & Pt.2, Two Rats, Rufelt) are included. That list ships as
+[`pipeline/book12_chapters.txt`](pipeline/book12_chapters.txt), ready to fetch.
+Book 12 was *rewritten*, but the web pages have since been re-uploaded with the same
+rewritten text the audiobook narrates — so aligning the audio against the current
+web text matches well.
 
 ## Installing aeneas (Mac)
 
@@ -177,6 +196,30 @@ the data has it. Two ways to get word-level:
 
 ---
 
+## Can this sync with Audible?
+
+Short answer: **not with the Audible app** — but you can read along with an Audible
+book you own by taking the audio out first.
+
+- **No live sync, no API.** Audible exposes no playback position and no API a third
+  party can read, and the audio is DRM-locked (`.aax`/`.aaxc`, tied to your account).
+  There's no way to make this player *follow* the Audible app as it plays.
+- **The workaround is format-shifting.** This player only needs a plain audio file
+  plus the matching text. If you own the audiobook, you can export it from Audible to
+  a DRM-free file (an `.m4b`) and then it's just another input to the pipeline — align
+  it and read along here instead of in the Audible app. Tools people use for this are
+  **Libation**, **OpenAudible**, and **audible-cli**. Note the legal nuance: removing
+  DRM is for **personal format-shifting of audio you've bought**, a legal gray area
+  under the DMCA — fine for your own listening, not for sharing or resale.
+- **Bonus: m4b files carry chapter markers.** A decrypted audiobook `.m4b` has
+  embedded, time-stamped chapter markers. `ffprobe`/`ffmpeg` can read them straight
+  out — so for an Audible book you get the chapter menu *without* scraping a TOC. (A
+  small `chapters_from_audio.py` could turn those into the player's chapter format and
+  map them onto segments after alignment — ask if you want it.)
+
+For *The Wandering Inn* specifically this is moot: you already have the Parsneau
+audio as plain `.mp3` tracks, so just run the pipeline on those.
+
 ## Licenses
 
 All open source. The player and these scripts are dependency-free and yours, no
@@ -196,7 +239,10 @@ this is for your own use, not redistribution.
 - `align.py` (aeneas → JSON, now with `--chapters`): built and tested.
 - `align_torch.py` (torchaudio `MMS_FA`, word-level, no aeneas): built; the torch
   run itself is untested in-session (needs the GPU box with torch installed).
-- `fetch_text.py`: pulls real chapter titles and segment-indexed chapter markers.
+- `list_chapters.py`: built and tested against the live TOC — generated
+  `pipeline/book12_chapters.txt` (19 chapters incl. interludes).
+- `fetch_text.py`: pulls real chapter titles and segment-indexed chapter markers;
+  verified end-to-end on a live chapter (6.33 E → 1681 sentences).
 - Forced alignment on your actual audio: **not yet run** (needs your machine).
   Untested against your files by definition. Run the track-01 loop and we iterate
   from whatever breaks.
