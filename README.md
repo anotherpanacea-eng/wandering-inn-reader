@@ -24,12 +24,12 @@ Two pieces:
 
 ## Try it right now (no setup)
 
-Open `index.html` on your phone or laptop and tap **Try the demo**. Short original
-passage, a placeholder tone track, just to show the read-along behavior: the
-current sentence brightens, the current word glows, the page follows, and tapping
-a line seeks the audio. The "Follow" button toggles auto-scroll. The demo carries
-two chapters, so the ☰ menu and inline chapter headers are live too; tap **Aa** to
-try text size, keep-screen-on, and the sleep timer.
+Open `index.html` on your phone or laptop and tap **Try the demo**. It plays the real
+**opening line of *The Wandering Inn*** (narrated by Andrea Parsneau — a short
+in-limits excerpt) so you can see the read-along: the sentence brightens, each word
+glows as it's spoken, the page follows, and tapping a line seeks the audio. The
+"Follow" button toggles auto-scroll; the ☰ menu shows the chapter, and **Aa** has text
+size, keep-screen-on, and the sleep timer.
 
 To get it onto your iPhone: put this folder in iCloud Drive or Dropbox, open
 `index.html` from the Files app in Safari. For your real audio later, use the two
@@ -292,13 +292,14 @@ audio as plain `.mp3` tracks, so just run the pipeline on those.
 
 ## Respecting the author's & narrator's IP
 
-This is a personal read-along tool, not a way to redistribute the book. The repo
-ships only a tiny **original** demo — never the author's prose or the narrator's
-voice. Hard limits on anything committed: **≤ 20 seconds of any audio** and **≤ ~one
-page (500 words) of text**. The full text you fetch and any audio you align stay on
-your machine (git-ignored). `tools/check_ip_limits.py` enforces this as a pre-commit
-hook (`git config core.hooksPath .githooks` to enable) — it even measures audio
-hidden in base64 `data:` URIs, and fails the commit if a limit is crossed.
+This is a personal read-along tool, not a way to redistribute the book. The only
+third-party content committed is a **deliberately tiny sample** — the opening line of
+*The Wandering Inn* and ~9 seconds of narration, in the demo. Hard limits on anything
+committed: **≤ 20 seconds of any audio** and **≤ ~one page (500 words) of text**. The
+full text you fetch and any audio you align stay on your machine (git-ignored).
+`tools/check_ip_limits.py` enforces this as a pre-commit hook (`git config
+core.hooksPath .githooks` to enable) — it even measures audio hidden in base64 `data:`
+URIs, and fails the commit if a limit is crossed.
 
 ## Licenses
 

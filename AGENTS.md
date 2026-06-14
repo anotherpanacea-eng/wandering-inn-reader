@@ -48,9 +48,10 @@ spec  →  review  →  write  →  review  →  fix  →  merge
     spans if you pass `--words-json`).
   - `align_torch.py` — **alternative** aligner on torchaudio `MMS_FA`: word-level
     timings, no aeneas/espeak install. Same output schema.
-- **`demo/`** — offline sample: `demo-align.json` (source of truth) + `demo-audio.mp3`
-  + `demo-data.js` (the embedded bundle the player's "Try the demo" loads). All
-  original (synthesized tone + placeholder prose), well under the IP limits below.
+- **`demo/`** — offline sample: `demo-align.json` (source of truth) + `demo-data.js`
+  (the embedded bundle the player's "Try the demo" loads — the audio is a base64
+  `data:` URI inside it, no standalone audio file). A short Book 1 excerpt (the opening
+  line + ~9s of narration), deliberately within the IP limits below.
 - **`tools/`** — `check_ip_limits.py`, the pre-commit IP guard (see § IP limits).
 
 ## The data contract (the load-bearing thing)
@@ -118,9 +119,10 @@ git config core.hooksPath .githooks
 
 Run it anytime: `python3 tools/check_ip_limits.py`. Any alignment sample you make
 must stay within the limits or be git-ignored (that's why `samples/` is ignored).
-The demo is original content (synthesized tone + placeholder prose), comfortably
-under both limits. If you raise a limit, change it in one place — `MAX_VOICE_SECONDS`
-/ `MAX_PROSE_WORDS` — and say why in the PR.
+The demo is a short real excerpt (Book 1's opening line + ~9s of narration),
+deliberately within both limits — it uses the sample allowance, it isn't exempt from
+it. If you raise a limit, change it in one place — `MAX_VOICE_SECONDS` /
+`MAX_PROSE_WORDS` — and say why in the PR.
 
 ## Verify before claiming green (no CI)
 
