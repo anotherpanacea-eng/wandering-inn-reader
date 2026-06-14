@@ -41,12 +41,22 @@ device; nothing uploads.
 ## Put it on a phone (free — no GitHub Pro needed)
 
 The player is one static HTML file: no server, no build, nothing to install. A phone
-just needs to open it in a browser. (GitHub Pages is the *only* option here that costs
-money for a **private** repo — skip it; the ones below are free.)
+just needs to open it in a browser.
 
-### Easiest: host it free, open the link, "Add to Home Screen"
+### It's already hosted — just open the link
 
-Put the folder on any free static host, then open the URL on the phone:
+> ### 📱 [anotherpanacea-eng.github.io/wandering-inn-reader](https://anotherpanacea-eng.github.io/wandering-inn-reader/)
+
+Open that on your phone and **Add to Home Screen** (iOS: **Share → Add to Home
+Screen**; Android Chrome: **⋮ → Add to Home screen / Install app**). The web-app
+manifest launches it **full-screen, like a native app**. That's the whole setup.
+
+(Hosted free on GitHub Pages because the repo is public — the IP guard guarantees no
+copyrighted audio/text is in it.)
+
+### Hosting your own copy (a fork)
+
+If you fork it, any free static host works — no GitHub Pro needed:
 
 - **Netlify Drop** — drag the project folder onto **[app.netlify.com/drop](https://app.netlify.com/drop)**
   for an instant URL. No account, no config, nothing to connect. Best for sending to a
