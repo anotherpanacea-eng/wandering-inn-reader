@@ -1,10 +1,18 @@
 {
-  "title": "Demo \u2014 The Inn at the Edge of the Road",
+  "title": "Demo — The Inn at the Edge of the Road",
   "note": "Original placeholder text + a synthesized tone track, purely to show the read-along UI.",
   "audio": "demo-audio.mp3",
   "chapters": [
-    { "title": "I. Arrival", "start": 0.0, "seg": 0 },
-    { "title": "II. The Stranger", "start": 12.0, "seg": 3 }
+    {
+      "title": "I. Arrival",
+      "start": 0.0,
+      "seg": 0
+    },
+    {
+      "title": "II. The Stranger",
+      "start": 12.0,
+      "seg": 3
+    }
   ],
   "segments": [
     {
@@ -316,89 +324,6 @@
           "w": "tonight.",
           "s": 16.643,
           "e": 17.0
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "start": 17.0,
-      "end": 21.5,
-      "text": "The door opened, and the wind carried in a stranger, snow still on his shoulders.",
-      "words": [
-        {
-          "w": "The",
-          "s": 17.0,
-          "e": 17.3
-        },
-        {
-          "w": "door",
-          "s": 17.3,
-          "e": 17.6
-        },
-        {
-          "w": "opened,",
-          "s": 17.6,
-          "e": 17.9
-        },
-        {
-          "w": "and",
-          "s": 17.9,
-          "e": 18.2
-        },
-        {
-          "w": "the",
-          "s": 18.2,
-          "e": 18.5
-        },
-        {
-          "w": "wind",
-          "s": 18.5,
-          "e": 18.8
-        },
-        {
-          "w": "carried",
-          "s": 18.8,
-          "e": 19.1
-        },
-        {
-          "w": "in",
-          "s": 19.1,
-          "e": 19.4
-        },
-        {
-          "w": "a",
-          "s": 19.4,
-          "e": 19.7
-        },
-        {
-          "w": "stranger,",
-          "s": 19.7,
-          "e": 20.0
-        },
-        {
-          "w": "snow",
-          "s": 20.0,
-          "e": 20.3
-        },
-        {
-          "w": "still",
-          "s": 20.3,
-          "e": 20.6
-        },
-        {
-          "w": "on",
-          "s": 20.6,
-          "e": 20.9
-        },
-        {
-          "w": "his",
-          "s": 20.9,
-          "e": 21.2
-        },
-        {
-          "w": "shoulders.",
-          "s": 21.2,
-          "e": 21.5
         }
       ]
     }

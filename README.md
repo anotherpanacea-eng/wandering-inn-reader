@@ -234,6 +234,16 @@ book you own by taking the audio out first.
 For *The Wandering Inn* specifically this is moot: you already have the Parsneau
 audio as plain `.mp3` tracks, so just run the pipeline on those.
 
+## Respecting the author's & narrator's IP
+
+This is a personal read-along tool, not a way to redistribute the book. The repo
+ships only a tiny **original** demo — never the author's prose or the narrator's
+voice. Hard limits on anything committed: **≤ 20 seconds of any audio** and **≤ ~one
+page (500 words) of text**. The full text you fetch and any audio you align stay on
+your machine (git-ignored). `tools/check_ip_limits.py` enforces this as a pre-commit
+hook (`git config core.hooksPath .githooks` to enable) — it even measures audio
+hidden in base64 `data:` URIs, and fails the commit if a limit is crossed.
+
 ## Licenses
 
 All open source. The player and these scripts are dependency-free and yours, no

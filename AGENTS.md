@@ -48,7 +48,9 @@ spec  →  review  →  write  →  review  →  fix  →  merge
   - `align_torch.py` — **alternative** aligner on torchaudio `MMS_FA`: word-level
     timings, no aeneas/espeak install. Same output schema.
 - **`demo/`** — offline sample: `demo-align.json` (source of truth) + `demo-audio.mp3`
-  + `demo-data.js` (the embedded bundle the player's "Try the demo" loads).
+  + `demo-data.js` (the embedded bundle the player's "Try the demo" loads). All
+  original (synthesized tone + placeholder prose), well under the IP limits below.
+- **`tools/`** — `check_ip_limits.py`, the pre-commit IP guard (see § IP limits).
 
 ## The data contract (the load-bearing thing)
 
@@ -93,11 +95,39 @@ trust that warning over a clean-looking output.
 - **License flags only matter if you ever sell it:** aeneas is AGPL-3.0, and the
   torchaudio `MMS_FA` model is CC-BY-NC. Both fine for personal use.
 
+## IP limits — what we ship (a hard commitment)
+
+To protect the author's text and the narrator's voice, the repo **never ships more
+than a small sample of either**:
+
+- **Voice:** ≤ 20 seconds of any single audio asset.
+- **Text:** ≤ 500 words (~one page) of narrative prose in any single file.
+- **Bulk:** the full audio (`Reading/`, `samples/`, `*.wav`/`*.m4b`) and the fetched
+  text (`book12.txt`, `*.chapters.json`) are git-ignored and never tracked.
+
+This is enforced, not just promised. `tools/check_ip_limits.py` scans every tracked
+file — **including audio embedded as base64 `data:` URIs** inside .js/.json/.html, so
+a long clip can't be smuggled past the file rule — and fails loud on any violation.
+"Couldn't measure the duration" counts as a failure, not a pass. Enable the
+pre-commit hook once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+Run it anytime: `python3 tools/check_ip_limits.py`. Any alignment sample you make
+must stay within the limits or be git-ignored (that's why `samples/` is ignored).
+The demo is original content (synthesized tone + placeholder prose), comfortably
+under both limits. If you raise a limit, change it in one place — `MAX_VOICE_SECONDS`
+/ `MAX_PROSE_WORDS` — and say why in the PR.
+
 ## Verify before claiming green (no CI)
 
 There is no CI; verification is local:
 
-- `python3 -m py_compile pipeline/*.py` — all three compile.
+- `python3 tools/check_ip_limits.py` — the IP-limits guard passes (also runs as the
+  pre-commit hook); confirm it still *fails* on an over-limit fixture if you touch it.
+- `python3 -m py_compile pipeline/*.py` — all scripts compile.
 - A functional check of `align.py` against a synthetic aeneas sync + a chapters
   file (assert chapters map to the right segment starts; assert an out-of-range
   marker is dropped with a warning).
