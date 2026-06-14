@@ -9,7 +9,12 @@ Two pieces:
 1. **`index.html`** — the player. A single file, no install, no server required.
    Open it on your phone, load an audio file and a sync file, and the text
    highlights and scrolls as the audio plays. Tap any line to jump there. It
-   remembers your position.
+   remembers your position — and offers one-tap **Resume** next time. It also has:
+   **chapter navigation** (a ☰ menu + inline chapter headers, when the sync file
+   carries chapters), **lock-screen / headphone controls** (play, pause, ±15s,
+   chapter skip, now-playing title — so you can pocket the phone), **text size**,
+   **keep-screen-on** while playing, and a **sleep timer** (15/30/45 min or
+   end-of-chapter). Tap **Aa** for those; everything persists.
 2. **`pipeline/`** — a one-time job you run on your Mac (or the GPU PC) to produce
    the sync file. It does **forced alignment**: it takes the audio plus the text
    that already exists and computes the timestamps. It does not transcribe, so you
@@ -22,7 +27,9 @@ Two pieces:
 Open `index.html` on your phone or laptop and tap **Try the demo**. Short original
 passage, a placeholder tone track, just to show the read-along behavior: the
 current sentence brightens, the current word glows, the page follows, and tapping
-a line seeks the audio. The "Follow" button toggles auto-scroll.
+a line seeks the audio. The "Follow" button toggles auto-scroll. The demo carries
+two chapters, so the ☰ menu and inline chapter headers are live too; tap **Aa** to
+try text size, keep-screen-on, and the sleep timer.
 
 To get it onto your iPhone: put this folder in iCloud Drive or Dropbox, open
 `index.html` from the Files app in Safari. For your real audio later, use the two
@@ -75,10 +82,27 @@ python3 -m aeneas.tools.execute_task "$TRACK" track01.txt \
 ```bash
 python3 align.py --sync sync01.json --title "Book 12 — track 01" \
   --audio "01 - The Witch of Webs The Wandering Inn, Book 12.mp3" --out align01.json
+# add chapter headers + a jump menu by passing the fetcher's markers:
+#   python3 align.py --sync sync01.json --chapters book12.chapters.json ... --out align01.json
 ```
 
 **4. Load `align01.json` + the track 01 mp3** into the player. If the highlight
 tracks the voice, the approach is proven and we scale up.
+
+### Or skip aeneas entirely (one command, word-level)
+
+If you'd rather not fight the aeneas install, `align_torch.py` does the same job on
+torchaudio's `MMS_FA` — it takes the audio and the text directly, aligns at the
+**word** level (so the per-word glow works), and writes the player JSON in one step:
+
+```bash
+cd pipeline
+python3 align_torch.py --audio "$TRACK" --text track01.txt \
+  --chapters book12.chapters.json --title "Book 12 — track 01" --out align01.json
+```
+
+Device is auto-detected (cuda → mps → cpu; ROCm shows up as `cuda`). Align one track
+at a time first — a single pass over a whole 30-hour volume is memory-heavy.
 
 ---
 
@@ -96,8 +120,10 @@ python3 fetch_text.py --out book12 --url-file book12_chapters.txt
 python3 fetch_text.py --out book12 https://wanderinginn.com/.../chapter-1/ ...
 ```
 
-It writes `book12.txt` (sentences, one per line) and `book12.chapters.json`
-(chapter boundaries, for showing chapter headers in the reader later).
+It writes `book12.txt` (sentences, one per line) and `book12.chapters.json` (real
+chapter titles, each tagged with the segment index it starts at). Pass that file to
+`align.py --chapters` or `align_torch.py --chapters` and the reader gets chapter
+headers and a ☰ jump menu.
 
 **Which chapters?** Get the list from the Table of Contents
 (every chapter is a server-rendered link) or the book page for *The Witch of Webs*.
@@ -142,12 +168,12 @@ sort themselves out from the text.
 
 aeneas gives **sentence-level** timing, which is the heart of read-along: the right
 line lights up and the page follows. The player also does **word-level** glow when
-the data has it. If you want that, the upgrade is a word-level forced aligner on
-your stack: **torchaudio**'s `MMS_FA` pipeline (`torchaudio.functional.forced_align`)
-runs on the torch you already have, GPU on the PC (ROCm reads as `cuda`), CPU/MPS on
-the Mac. It returns word spans; feed them to `align.py --words-json`. More setup,
-finer highlight. We can build that path once the sentence-level version earns its
-keep.
+the data has it. Two ways to get word-level:
+
+- **`align_torch.py`** (above) — torchaudio's `MMS_FA` does it in one step on the
+  torch you already have. This is the simplest path to word-level.
+- **`align.py --words-json`** — if some other aligner produced a flat word-timestamp
+  list, `align.py` packs those words into their containing sentences by time.
 
 ---
 
@@ -163,8 +189,14 @@ this is for your own use, not redistribution.
 
 ## Status
 
-- Player: built and working (demo included).
-- `align.py` converter: built and tested.
+- Player: built and working (demo included). Chapters, lock-screen / headphone
+  controls, one-tap resume, text size, keep-screen-on, and sleep timer are in;
+  init + the demo render path are logic-checked. A browser can't be driven from a
+  cloud session, so the on-device UI is best confirmed by opening the demo.
+- `align.py` (aeneas → JSON, now with `--chapters`): built and tested.
+- `align_torch.py` (torchaudio `MMS_FA`, word-level, no aeneas): built; the torch
+  run itself is untested in-session (needs the GPU box with torch installed).
+- `fetch_text.py`: pulls real chapter titles and segment-indexed chapter markers.
 - Forced alignment on your actual audio: **not yet run** (needs your machine).
   Untested against your files by definition. Run the track-01 loop and we iterate
   from whatever breaks.

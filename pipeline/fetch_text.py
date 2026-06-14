@@ -24,7 +24,12 @@ Usage:
 
 Outputs:
   <out>.txt          sentences, one per line, blank line between paragraphs
-  <out>.chapters.json  [{title, url, first_line, n_lines}, ...] for chapter markers
+  <out>.chapters.json  [{title, url, seg, n_sentences}, ...] for chapter markers
+
+The chapter marker's `seg` is the index of the chapter's first sentence among the
+*non-blank* lines (i.e. the segment index aeneas/align.py will assign it), NOT the
+raw line number — so chapter boundaries survive the blank paragraph-break lines and
+map straight onto the player's segments. `align.py --chapters` consumes this.
 
 Dependencies:  pip3 install requests beautifulsoup4
 """
@@ -58,7 +63,21 @@ def split_sentences(text):
 def clean(s):
     return re.sub(r"\s+", " ", s.replace(" ", " ")).strip()
 
-def extract_paragraphs(html):
+def extract_title(soup, url):
+    """The real chapter title (WordPress `h1.entry-title`), not the URL slug."""
+    el = (soup.select_one("h1.entry-title")
+          or soup.select_one(".entry-title")
+          or soup.find("h1")
+          or soup.find("title"))
+    if el is None:
+        return title_from_url(url)
+    t = clean(el.get_text(" ", strip=True))
+    # the <title> tag carries the site suffix ("8.01 – The Wandering Inn"); drop it
+    t = re.split(r"\s+[–—|-]\s+(?:The Wandering Inn)\s*$", t)[0].strip()
+    return t or title_from_url(url)
+
+def extract(html, url):
+    """Return (title, [paragraph, ...]) for one chapter page."""
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, "html.parser")
     body = (soup.select_one("div.entry-content")
@@ -68,6 +87,7 @@ def extract_paragraphs(html):
     if body is None:
         raise RuntimeError("Could not find chapter body (div.entry-content). "
                            "Site markup may have changed — adjust the selector.")
+    title = extract_title(soup, url)
     paras = []
     for p in body.find_all("p"):
         t = clean(p.get_text(" ", strip=True))
@@ -78,7 +98,7 @@ def extract_paragraphs(html):
         if low.startswith(("previous chapter", "next chapter", "author's note:")) and len(t) < 60:
             continue
         paras.append(t)
-    return paras
+    return title, paras
 
 def fetch(url):
     import requests
@@ -106,22 +126,28 @@ def main():
         sys.exit("Give me chapter URLs (args or --url-file).")
 
     lines, markers = [], []
+    seg = 0   # running count of non-blank sentence lines == the segment index align.py assigns
     for i, url in enumerate(urls):
         try:
-            paras = extract_paragraphs(fetch(url))
+            title, paras = extract(fetch(url), url)
         except Exception as e:
             print(f"  ! {url}: {e}", file=sys.stderr); continue
-        first = len(lines)
+        chapter_first_seg = seg
         sents = []
         for para in paras:
-            sents += split_sentences(para)
+            for s in split_sentences(para):
+                sents.append(s); seg += 1
             sents.append("")            # blank line marks paragraph break
         while sents and sents[-1] == "":
             sents.pop()
+        n_sents = sum(1 for s in sents if s)
+        if n_sents == 0:
+            print(f"  ! {title}: no sentences extracted — skipping marker", file=sys.stderr)
+            continue
         lines += sents + [""]
-        markers.append({"title": title_from_url(url), "url": url,
-                        "first_line": first, "n_lines": len(sents)})
-        print(f"  + {title_from_url(url)}: {len([s for s in sents if s])} sentences")
+        markers.append({"title": title, "url": url,
+                        "seg": chapter_first_seg, "n_sentences": n_sents})
+        print(f"  + {title}: {n_sents} sentences (segments {chapter_first_seg}–{seg - 1})")
         time.sleep(a.sleep)
 
     with open(a.out + ".txt", "w", encoding="utf-8") as f:

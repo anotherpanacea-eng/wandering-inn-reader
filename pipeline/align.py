@@ -9,7 +9,9 @@ read back timestamps. aeneas is the recommended aligner (see README) and emits a
 map into the schema index.html expects.
 
 Schema produced:
-  { "title": str, "audio": str, "segments": [
+  { "title": str, "audio": str,
+    "chapters": [ {"title": str, "start": float, "seg": int}, ... ],  # optional
+    "segments": [
       { "id": int, "start": float, "end": float, "text": str,
         "words": [ {"w": str, "s": float, "e": float}, ... ]   # optional
       }, ... ] }
@@ -17,6 +19,7 @@ Schema produced:
 Usage:
   python3 align.py --sync sync.json --title "Book 12 — Witch of Webs" --out align.json
   python3 align.py --sync sync.json --audio volume12.mp3 --title "..." --out align.json
+  python3 align.py --sync sync.json --chapters book12.chapters.json --title "..." --out align.json
 
 Aeneas sync-map input (default JSON format) looks like:
   {"fragments":[{"id":"f0001","lines":["A sentence."],"begin":"0.000","end":"4.2"}, ...]}
@@ -73,10 +76,36 @@ def attach_words(segs, words):
             segs[si]["words"].append({"w": w["w"], "s": round(w["s"], 3), "e": round(w["e"], 3)})
     return segs
 
+def attach_chapters(segs, markers):
+    """Turn fetch_text.py chapter markers into player chapters keyed by segment.
+
+    Each marker carries `seg` — the index of the chapter's first sentence among
+    the non-blank lines, which is exactly the segment index here (both sides skip
+    blanks in input order). A `seg` past the end means the sentence-count the
+    fetcher saw and the fragment-count aeneas produced disagree — surface it
+    loudly rather than silently dropping the chapter.
+    """
+    chapters, dropped = [], 0
+    for m in markers:
+        seg = m.get("seg", m.get("first_line"))   # tolerate the older key name
+        title = (m.get("title") or "Chapter").strip()
+        if seg is None or not (0 <= seg < len(segs)):
+            print(f"  ! chapter {title!r}: seg index {seg} out of range "
+                  f"(0..{len(segs) - 1}) — text/audio fragment counts disagree; dropping",
+                  file=sys.stderr)
+            dropped += 1
+            continue
+        chapters.append({"title": title, "start": segs[seg]["start"], "seg": seg})
+    if dropped:
+        print(f"  ! {dropped} chapter marker(s) dropped; check that the text fed to the "
+              f"aligner matches the chapters file.", file=sys.stderr)
+    return chapters
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sync", required=True, help="aeneas sync map JSON")
     ap.add_argument("--words-json", help="optional flat word-timestamp list")
+    ap.add_argument("--chapters", help="fetch_text.py <out>.chapters.json for chapter markers")
     ap.add_argument("--title", default="Untitled")
     ap.add_argument("--audio", default="", help="audio filename hint stored in output")
     ap.add_argument("--out", default="align.json")
@@ -89,12 +118,16 @@ def main():
         attach_words(segs, load(a.words_json))
 
     doc = {"title": a.title, "audio": a.audio, "segments": segs}
+    chapters = attach_chapters(segs, load(a.chapters)) if a.chapters else []
+    if chapters:
+        doc["chapters"] = chapters
+
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, indent=2)
     nwords = sum(len(s["words"]) for s in segs)
     dur = segs[-1]["end"]
     print(f"Wrote {a.out}: {len(segs)} sentences, {nwords} word-timings, "
-          f"{dur/60:.1f} min of timeline.")
+          f"{len(chapters)} chapters, {dur/60:.1f} min of timeline.")
 
 if __name__ == "__main__":
     main()

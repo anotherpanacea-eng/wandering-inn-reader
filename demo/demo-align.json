@@ -2,6 +2,10 @@
   "title": "Demo \u2014 The Inn at the Edge of the Road",
   "note": "Original placeholder text + a synthesized tone track, purely to show the read-along UI.",
   "audio": "demo-audio.mp3",
+  "chapters": [
+    { "title": "I. Arrival", "start": 0.0, "seg": 0 },
+    { "title": "II. The Stranger", "start": 12.0, "seg": 3 }
+  ],
   "segments": [
     {
       "id": 0,
