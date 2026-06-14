@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Inn Reader">
+  <rect width="512" height="512" rx="114" fill="#14180f"/>
+  <g fill="#39402f">
+    <rect x="104" y="150" width="304" height="26" rx="13"/>
+    <rect x="104" y="206" width="248" height="26" rx="13"/>
+    <rect x="104" y="318" width="288" height="26" rx="13"/>
+    <rect x="104" y="374" width="208" height="26" rx="13"/>
+  </g>
+  <!-- the "current" line, warm, with a brighter glowing word -->
+  <rect x="104" y="262" width="232" height="28" rx="14" fill="#e7b75f"/>
+  <rect x="104" y="262" width="78" height="28" rx="14" fill="#f6e4b8"/>
+</svg>

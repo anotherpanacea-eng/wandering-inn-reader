@@ -38,6 +38,52 @@ device; nothing uploads.
 
 ---
 
+## Put it on a phone (free — no GitHub Pro needed)
+
+The player is one static HTML file: no server, no build, nothing to install. A phone
+just needs to open it in a browser. (GitHub Pages is the *only* option here that costs
+money for a **private** repo — skip it; the ones below are free.)
+
+### Easiest: host it free, open the link, "Add to Home Screen"
+
+Put the folder on any free static host, then open the URL on the phone:
+
+- **Netlify Drop** — drag the project folder onto **[app.netlify.com/drop](https://app.netlify.com/drop)**
+  for an instant URL. No account, no config, nothing to connect. Best for sending to a
+  friend. (Sign in if you want the link to stick around.)
+- **Cloudflare Pages** — dash.cloudflare.com → Pages → *Connect to Git* → pick this
+  repo. Build command: **(leave empty)**. Output directory: **`/`**. Free, works with
+  **private** repos, redeploys on every push.
+- **Netlify / Vercel from Git** — same idea: import the repo, empty build command,
+  publish directory `/`. Free tier, private repos fine.
+- **Or make the repo public + GitHub Pages** — free for *public* repos, and safe now:
+  the IP guard guarantees no copyrighted audio/text ships. Settings → Pages → deploy
+  from `main` / root.
+
+Then on the phone, open the URL and **Add to Home Screen** — iOS: **Share → Add to
+Home Screen**; Android Chrome: **⋮ → Add to Home screen / Install app**. Thanks to the
+web-app manifest it launches **full-screen, like a native app**.
+
+### No hosting at all (open the file locally)
+
+Put the folder in a cloud drive and open `index.html` in the mobile browser:
+
+- **Android** — Files/Drive → open `index.html` in Chrome. Works.
+- **iPhone** — iOS Safari is finicky about local `.html` from the Files app; hosting
+  (above) is much smoother. If you must: **Files** app → long-press `index.html` →
+  **Share** → open in a browser.
+
+### Using it once it's open
+
+1. Tap **Try the demo** to see the read-along immediately, no files.
+2. For real listening: **Load audio file** (your `.mp3`/`.m4a`) + **Load sync file**
+   (the `.json` from the pipeline) → **Open reader**.
+
+**Everything stays on the device — nothing is uploaded.** Your spot is remembered, and
+**Resume** brings you back next time. The phone is **playback only** — making a sync
+file (forced alignment) needs a computer (see below). Hand a friend a `.json` and point
+them at their own legally-owned audio, and they can read along on their own phone.
+
 ## Your files
 
 Your Book 12 lives at:

@@ -37,7 +37,8 @@ spec  →  review  →  write  →  review  →  fix  →  merge
 
 - **`index.html`** — the player. One self-contained file: no build step, no
   framework, no dependencies, no network. Keep it that way. Everything runs
-  locally on the device; nothing uploads.
+  locally on the device; nothing uploads. `manifest.webmanifest` + `icon.svg`
+  make it installable full-screen via "Add to Home Screen" (no native build).
 - **`pipeline/`** — one-time jobs run on the operator's Mac / GPU PC:
   - `list_chapters.py` — read the live Table of Contents → a chapter-URL list for any
     Volume or audiobook Book (slices the ordered TOC, so interludes come along).
