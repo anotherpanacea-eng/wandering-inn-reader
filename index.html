@@ -263,7 +263,10 @@
     let active=-1;
     const ws=segs[curSeg].words;
     for(let k=0;k<ws.length;k++){ if(t>=ws[k].s) active=k; else break; }
-    for(let k=0;k<curWordEls.length;k++) curWordEls[k].classList.toggle("on", k===active && t<=ws[active].e+0.05);
+    // active<0 before the first word (e.g. torch text starting at 8.4s): light nothing,
+    // and never index ws[-1]. (k===active already short-circuits; the guard is explicit.)
+    for(let k=0;k<curWordEls.length;k++)
+      curWordEls[k].classList.toggle("on", active>=0 && k===active && t<=ws[active].e+0.05);
   }
   function setChap(t){
     const ci=findChap(t);

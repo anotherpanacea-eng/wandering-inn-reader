@@ -45,21 +45,17 @@ def read_sentences(path):
         return [ln.strip() for ln in f if ln.strip()]
 
 def build_tokens(sentences):
-    """Flatten sentences into alignable words, remembering the (sentence, display) origin.
+    """Every display token, in order, tagged with its sentence and alignable form.
 
-    Returns (norm_words, meta) where meta[i] = {"seg": sentence_index, "w": display_word}
-    for the i-th alignable word. Words that normalize to empty are skipped for
-    alignment but still rendered (the player tolerates sentences whose word spans
-    don't cover every glyph)."""
-    norm_words, meta = [], []
+    Returns a list of {"seg", "w" (display), "nw" (uroman-normalized)}. Tokens that
+    normalize to empty — standalone numbers like "10", punctuation-only — are NOT sent
+    to the aligner, but are KEPT so the player (which rebuilds the active sentence from
+    `words`) still shows the full text; they inherit a neighbouring word's timestamp."""
+    tokens = []
     for si, sent in enumerate(sentences):
         for tok in sent.split():
-            nw = normalize_word(tok)
-            if not nw:
-                continue
-            norm_words.append(nw)
-            meta.append({"seg": si, "w": tok})
-    return norm_words, meta
+            tokens.append({"seg": si, "w": tok, "nw": normalize_word(tok)})
+    return tokens
 
 def attach_chapters(segs, markers):
     """Same contract as align.py: map chapter markers' `seg` index onto segment start times."""
@@ -128,7 +124,8 @@ def align(audio_path, sentences, device):
         sys.exit(f"torch/torchaudio not installed: {e}\n"
                  f"  pip3 install torch torchaudio")
 
-    norm_words, meta = build_tokens(sentences)
+    tokens = build_tokens(sentences)
+    norm_words = [t["nw"] for t in tokens if t["nw"]]
     if not norm_words:
         sys.exit("No alignable words in the text.")
 
@@ -156,24 +153,38 @@ def align(audio_path, sentences, device):
         print(f"  ! aligner returned {len(token_spans)} word spans for {len(norm_words)} "
               f"words — alignment is unreliable; inspect the text.", file=sys.stderr)
 
-    # build per-segment word lists from the flat aligned spans
-    n = len(sentences)
-    seg_words = [[] for _ in range(n)]
-    for spans, m in zip(token_spans, meta):
-        s = round(spans[0].start * ratio, 3)
-        e = round(spans[-1].end * ratio, 3)
-        seg_words[m["seg"]].append({"w": m["w"], "s": s, "e": e})
+    # give each ALIGNABLE token its span time; skipped tokens stay None for now
+    ai = 0
+    for t in tokens:
+        if t["nw"] and ai < len(token_spans):
+            sp = token_spans[ai]; ai += 1
+            t["s"], t["e"] = sp[0].start * ratio, sp[-1].end * ratio
+        else:
+            t["s"] = t["e"] = None
+
+    # group by sentence; fill skipped tokens from a neighbour so `words` covers the
+    # WHOLE text (the player renders the active sentence purely from `words`)
+    seg_tokens = [[] for _ in range(len(sentences))]
+    for t in tokens:
+        seg_tokens[t["seg"]].append(t)
 
     segments, last_end = [], 0.0
     for si, sent in enumerate(sentences):
-        ws = seg_words[si]
-        if ws:
-            start, end = ws[0]["s"], ws[-1]["e"]
-        else:                                       # no aligned word (rare): pin to last known time
-            start = end = last_end
+        toks = seg_tokens[si]
+        seed = next((t["s"] for t in toks if t["s"] is not None), last_end)  # first real time, else timeline
+        prev = seed
+        words = []
+        for t in toks:
+            if t["s"] is None:                      # skipped token: inherit the previous end (zero-width)
+                s = e = prev
+            else:
+                s, e = t["s"], t["e"]; prev = e
+            words.append({"w": t["w"], "s": round(s, 3), "e": round(e, 3)})
+        start = words[0]["s"] if words else last_end
+        end = max((w["e"] for w in words), default=last_end)
         last_end = max(last_end, end)
         segments.append({"id": len(segments), "start": round(start, 3),
-                         "end": round(end, 3), "text": sent, "words": ws})
+                         "end": round(end, 3), "text": sent, "words": words})
     return segments
 
 def main():

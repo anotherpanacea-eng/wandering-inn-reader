@@ -37,6 +37,13 @@ def tracked_files():
     out = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True).stdout
     return [l for l in out.splitlines() if l]
 
+def staged_bytes(path):
+    """The blob git WOULD SHIP for `path` — the index (staged) version, not the
+    working tree. In a pre-commit hook these differ if a file was staged over-limit
+    then edited back under it; we must judge what's actually staged."""
+    r = subprocess.run(["git", "show", f":{path}"], capture_output=True)
+    return r.stdout if r.returncode == 0 else None
+
 def measure_seconds(data):
     """Audio duration in seconds via ffprobe → afconvert, or None if neither exists."""
     path = wavp = None
@@ -109,12 +116,17 @@ def main():
                 violations.append(f"{path}: must not be tracked — {why}")
 
         low = path.lower()
-        if low.endswith(AUDIO_EXT) and os.path.exists(path):
-            with open(path, "rb") as f:
-                check_audio_blob(path, f.read(), violations)
+        if not (low.endswith(AUDIO_EXT) or low.endswith(TEXTY_EXT)):
+            continue
+        data = staged_bytes(path)
+        if data is None:
+            continue
 
-        if low.endswith(TEXTY_EXT) and os.path.exists(path):
-            text = open(path, encoding="utf-8", errors="replace").read()
+        if low.endswith(AUDIO_EXT):
+            check_audio_blob(path, data, violations)
+
+        if low.endswith(TEXTY_EXT):
+            text = data.decode("utf-8", "replace")
             for b64 in DATA_AUDIO.findall(text):
                 try:
                     check_audio_blob(f"{path} (embedded data: URI)", base64.b64decode(b64), violations)
