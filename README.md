@@ -97,12 +97,26 @@ torchaudio's `MMS_FA` — it takes the audio and the text directly, aligns at th
 
 ```bash
 cd pipeline
-python3 align_torch.py --audio "$TRACK" --text track01.txt \
-  --chapters book12.chapters.json --title "Book 12 — track 01" --out align01.json
+# 1) decode mp3 → wav. On macOS this is built in (no ffmpeg needed):
+afconvert -f WAVE -d LEI16@16000 "$TRACK" track.wav
+# 2) align:
+python3 align_torch.py --audio track.wav --text track.txt \
+  --chapters book12.chapters.json --title "Book 12 — track 02" --out align.json
 ```
 
-Device is auto-detected (cuda → mps → cpu; ROCm shows up as `cuda`). Align one track
-at a time first — a single pass over a whole 30-hour volume is memory-heavy.
+Why the wav step: torchaudio ≥ 2.11 decodes compressed audio through `torchcodec`,
+which needs ffmpeg — so `align_torch.py` reads **wav** (via `soundfile`/stdlib, no
+ffmpeg) and you pre-convert with `afconvert` (mac) or ffmpeg. Device is auto-detected
+(cuda → mps → cpu; ROCm shows up as `cuda`). Align one track at a time — a single
+pass over the whole volume is memory-heavy.
+
+> **Proven on your real audio.** This path ran end-to-end against Book 12 track 02:
+> `afconvert` decode → `align_torch.py` → 60 sentences / ~1,000 word timings,
+> correctly placed (e.g. "Dawn struck the city of Manus…" at 8.4–14.1s). A 6-minute
+> sample sync (`samples/`, git-ignored) loads straight into the player. Note the **37
+> audio tracks don't line up with the 19 web chapters** — track 01 is a 16-second
+> credits clip; chapter text starts in track 02. For clean chapter headers, align the
+> whole concatenated volume against `book12.txt`.
 
 ---
 
@@ -237,8 +251,9 @@ this is for your own use, not redistribution.
   init + the demo render path are logic-checked. A browser can't be driven from a
   cloud session, so the on-device UI is best confirmed by opening the demo.
 - `align.py` (aeneas → JSON, now with `--chapters`): built and tested.
-- `align_torch.py` (torchaudio `MMS_FA`, word-level, no aeneas): built; the torch
-  run itself is untested in-session (needs the GPU box with torch installed).
+- `align_torch.py` (torchaudio `MMS_FA`, word-level, no aeneas): built **and run
+  end-to-end on real Book 12 audio** (track 02, CPU) — 60 sentences / ~1,000 word
+  timings, correctly placed. Reads wav via `soundfile`/stdlib (no ffmpeg/torchcodec).
 - `list_chapters.py`: built and tested against the live TOC — generated
   `pipeline/book12_chapters.txt` (19 chapters incl. interludes).
 - `fetch_text.py`: pulls real chapter titles and segment-indexed chapter markers;

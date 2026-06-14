@@ -78,6 +78,38 @@ def attach_chapters(segs, markers):
               file=sys.stderr)
     return chapters
 
+def load_audio(path):
+    """Load audio → (waveform[channels, samples] float32 tensor, sample_rate).
+
+    Deliberately avoids torchaudio.load: torchaudio >= 2.11 routes it through
+    torchcodec, which needs ffmpeg — defeating this tool's no-ffmpeg goal. We read
+    WAV/FLAC/OGG with soundfile (libsndfile, no ffmpeg). For mp3/m4a, convert to WAV
+    first — macOS: `afconvert -f WAVE -d LEI16@16000 in.mp3 out.wav` (native), or
+    ffmpeg if you have it."""
+    import torch
+    try:
+        import soundfile as sf
+        data, sr = sf.read(path, dtype="float32", always_2d=True)    # (frames, channels)
+        return torch.from_numpy(data.T).contiguous(), sr
+    except Exception as e_sf:
+        import wave, numpy as np
+        try:
+            with wave.open(path, "rb") as w:                          # 16-bit PCM WAV fallback
+                ch, sw, sr, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+                raw = w.readframes(n)
+            if sw != 2:
+                raise RuntimeError(f"fallback handles 16-bit PCM WAV only (got {sw * 8}-bit)")
+            a = (np.frombuffer(raw, dtype="<i2").astype("float32") / 32768.0).reshape(-1, ch).T
+            return torch.from_numpy(a).contiguous(), sr
+        except Exception as e_wave:
+            try:
+                import torchaudio                                     # last resort (needs torchcodec/ffmpeg)
+                return torchaudio.load(path)
+            except Exception as e_ta:
+                sys.exit(f"Could not read audio {path!r}. Convert to WAV first — macOS: "
+                         f"afconvert -f WAVE -d LEI16@16000 in.mp3 out.wav\n"
+                         f"  soundfile: {e_sf}\n  wave: {e_wave}\n  torchaudio: {e_ta}")
+
 def pick_device(override):
     import torch
     if override:
@@ -106,7 +138,7 @@ def align(audio_path, sentences, device):
     tokenizer = bundle.get_tokenizer()
     aligner = bundle.get_aligner()
 
-    waveform, sr = torchaudio.load(audio_path)
+    waveform, sr = load_audio(audio_path)
     if waveform.size(0) > 1:                       # downmix to mono
         waveform = waveform.mean(dim=0, keepdim=True)
     if sr != bundle.sample_rate:

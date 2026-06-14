@@ -14,7 +14,9 @@ sync*.json
 align*.json
 volume*.mp3
 
-# Your audiobook source (never committed — copyright + size)
+# Your audiobook source + working audio (never committed — copyright + size)
 Reading/
 *.m4a
 *.m4b
+*.wav
+samples/
