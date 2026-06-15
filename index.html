@@ -435,7 +435,7 @@
     $("#cur").textContent=fmt(t); updatePosition(); });
   audio.addEventListener("loadedmetadata",()=>{ $("#dur").textContent=fmt(audio.duration);
     if(playlist){ const st=Math.min(pendingSeek||0, (audio.duration||1e9)-0.1);
-      if(st>0) audio.currentTime=st; if(pendingAutoplay) audio.play(); pendingAutoplay=false; }
+      if(st>0) audio.currentTime=st; if(pendingAutoplay) audio.play().catch(()=>{}); pendingAutoplay=false; }
     else { restore(); }
     const t=audio.currentTime; setSeg(findSeg(t)); setChap(t); $("#cur").textContent=fmt(t); updatePosition(); });
   audio.addEventListener("error",()=>{ if(audio.src) toast("Couldn't load that audio file."); });
@@ -506,7 +506,7 @@
   function parseJsonFile(file){ return new Promise((res,rej)=>{ const fr=new FileReader();
     fr.onload=()=>{ try{ res(JSON.parse(fr.result)); }catch(err){ rej(err); } };
     fr.onerror=()=>rej(fr.error); fr.readAsText(file); }); }
-  const trackNo = name => { const m=/(\d+)/.exec(name||""); return m ? m[1].padStart(2,"0") : (name||""); };
+  const trackNo = name => { const m=/(\d+)/.exec(name||""); return m ? m[1].padStart(4,"0") : (name||""); };
 
   function buildPlaylist(files){
     return new Promise(resolve=>{
@@ -544,17 +544,22 @@
     });
   }
 
+  let loadToken=0, curObjUrl=null;
   function loadTrack(idx, seekT, autoplay){
     if(!playlist || idx<0 || idx>=playlist.tracks.length) return;
+    const token=++loadToken;                 // guard against out-of-order async loads
     playlist.idx=idx;
     const t=playlist.tracks[idx];
     parseJsonFile(t.syncFile).then(d=>{
+      if(token!==loadToken) return;           // a newer loadTrack superseded this one
       doc=d; isDemo=false; pendingAudioFile=t.audioFile;
       pendingSeek=Math.max(0, seekT||0); pendingAutoplay=!!autoplay;
-      build(); curSeg=-1; curChap=-1;
-      audio.src=URL.createObjectURL(t.audioFile);   // -> loadedmetadata seeks / autoplays
+      build(); curSeg=-1; curChap=-2;         // -2 (not -1) so setChap always re-runs, even on chapterless tracks
+      if(curObjUrl) URL.revokeObjectURL(curObjUrl);   // free the previous track's blob URL
+      curObjUrl=URL.createObjectURL(t.audioFile);
+      audio.src=curObjUrl;                    // -> loadedmetadata seeks / autoplays
       setSeg(0); setChap(0); savePlaylistPos();
-    }).catch(()=>toast("Couldn't read "+t.syncFile.name));
+    }).catch(()=>{ if(token===loadToken) toast("Couldn't read "+t.syncFile.name); });
   }
   function prevTrack(){ if(playlist) loadTrack(audio.currentTime<3 ? playlist.idx-1 : playlist.idx, 0, true); }
   function nextTrack(){ if(playlist) loadTrack(playlist.idx+1, 0, true); }
