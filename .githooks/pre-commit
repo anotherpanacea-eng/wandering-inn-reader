@@ -1,0 +1,4 @@
+#!/bin/sh
+# Enforce the IP-content limits (≤20s voice, ≤~1 page text, no bulk artifacts)
+# before every commit. Enable once per clone:   git config core.hooksPath .githooks
+exec python3 "$(git rev-parse --show-toplevel)/tools/check_ip_limits.py"
