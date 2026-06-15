@@ -8,11 +8,15 @@ Two pieces:
 
 1. **`index.html`** — the player. A single file, no install, no server required.
    Open it on your phone, load an audio file and a sync file, and the text
-   highlights and scrolls as the audio plays. Tap any line to jump there. It
-   remembers your position — and offers one-tap **Resume** next time. It also has:
-   **chapter navigation** (a ☰ menu + inline chapter headers, when the sync file
-   carries chapters), **lock-screen / headphone controls** (play, pause, ±15s,
-   chapter skip, now-playing title — so you can pocket the phone), **text size**,
+   highlights and scrolls as the audio plays. Tap any line to jump there.
+   **Switch between listening and reading freely:** pause, read ahead at your own
+   pace (swipe or PageUp/PageDown to turn **pages**), then press play and the
+   narration continues from the line your eyes left off on — and the reverse, since
+   listening moves the same place-marker. It remembers your position — to the page —
+   and offers one-tap **Resume** next time. It also has: **chapter navigation** (a ☰
+   menu + inline chapter headers, when the sync file carries chapters), a **page
+   counter**, **lock-screen / headphone controls** (play, pause, ±15s, chapter skip,
+   now-playing title — so you can pocket the phone), **text size**,
    **keep-screen-on** while playing, and a **sleep timer** (15/30/45 min or
    end-of-chapter). Tap **Aa** for those; everything persists.
 2. **`pipeline/`** — a one-time job you run on your Mac (or the GPU PC) to produce
@@ -27,9 +31,10 @@ Two pieces:
 Open `index.html` on your phone or laptop and tap **Try the demo**. It plays the real
 **opening line of *The Wandering Inn*** (narrated by Andrea Parsneau — a short
 in-limits excerpt) so you can see the read-along: the sentence brightens, each word
-glows as it's spoken, the page follows, and tapping a line seeks the audio. The
-"Follow" button toggles auto-scroll; the ☰ menu shows the chapter, and **Aa** has text
-size, keep-screen-on, and the sleep timer.
+glows as it's spoken, the page follows, and tapping a line seeks the audio. Pause and
+the reader becomes a book — turn pages, read ahead, then play to continue from where
+you read. The "Follow" button toggles auto-scroll; the ☰ menu shows the chapter and
+page, and **Aa** has text size, keep-screen-on, and the sleep timer.
 
 To get it onto your iPhone: put this folder in iCloud Drive or Dropbox, open
 `index.html` from the Files app in Safari. For your real audio later, use the two
@@ -314,8 +319,10 @@ this is for your own use, not redistribution.
 ## Status
 
 - Player: built and working (demo included). Chapters, lock-screen / headphone
-  controls, one-tap resume, text size, keep-screen-on, and sleep timer are in;
-  init + the demo render path are logic-checked. A browser can't be driven from a
+  controls, one-tap resume, text size, keep-screen-on, and sleep timer are in.
+  **Read↔listen handoff via pages** (paged navigation + a single place-marker shared
+  between reading and listening) is in; its page math and handoff/restore logic are
+  unit-checked, the render path is logic-checked. A browser can't be driven from a
   cloud session, so the on-device UI is best confirmed by opening the demo.
 - `align.py` (aeneas → JSON, now with `--chapters`): built and tested.
 - `align_torch.py` (torchaudio `MMS_FA`, word-level, no aeneas): built **and run
