@@ -20,7 +20,6 @@ import base64, json, os, re, subprocess, sys, tempfile, wave
 
 MAX_VOICE_SECONDS = 20
 MAX_PROSE_WORDS   = 500
-SIZE_UNVERIFIABLE = 200 * 1024     # an unmeasurable audio blob under this is presumed short
 
 AUDIO_EXT = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".wav", ".flac")
 TEXTY_EXT = (".js", ".json", ".html", ".htm", ".txt")
@@ -44,8 +43,62 @@ def staged_bytes(path):
     r = subprocess.run(["git", "show", f":{path}"], capture_output=True)
     return r.stdout if r.returncode == 0 else None
 
+def _wav_seconds(data):
+    import io
+    with wave.open(io.BytesIO(data), "rb") as w:
+        fr = w.getframerate()
+        return w.getnframes() / fr if fr else None
+
+def _mp4_seconds(data):
+    """Duration from the MP4/M4A `mvhd` atom (duration / timescale) — no decoder, no
+    full read. Covers our embedded AAC demo on any OS, so the guard MEASURES it rather
+    than presuming it from file size."""
+    import struct
+    def boxes(buf, start, end):
+        i = start
+        while i + 8 <= end:
+            size = struct.unpack(">I", buf[i:i + 4])[0]
+            btype = buf[i + 4:i + 8]
+            hdr = 8
+            if size == 1:
+                size = struct.unpack(">Q", buf[i + 8:i + 16])[0]; hdr = 16
+            elif size == 0:
+                size = end - i
+            if size < hdr or i + size > end:
+                return
+            yield btype, i + hdr, i + size
+            i += size
+    def find(buf, target, start, end):
+        for bt, s, e in boxes(buf, start, end):
+            if bt == target:
+                return s, e
+        return None
+    moov = find(data, b"moov", 0, len(data))
+    if not moov:
+        return None
+    mvhd = find(data, b"mvhd", *moov)
+    if not mvhd:
+        return None
+    p = mvhd[0]; base = p + 4                      # skip version(1) + flags(3)
+    if data[p] == 1:
+        timescale = struct.unpack(">I", data[base + 16:base + 20])[0]
+        duration  = struct.unpack(">Q", data[base + 20:base + 28])[0]
+    else:
+        timescale = struct.unpack(">I", data[base + 8:base + 12])[0]
+        duration  = struct.unpack(">I", data[base + 12:base + 16])[0]
+    return duration / timescale if timescale else None
+
 def measure_seconds(data):
-    """Audio duration in seconds via ffprobe → afconvert, or None if neither exists."""
+    """Audio duration in seconds. Pure-Python parsers first (mp4/m4a, wav — portable,
+    no external tools), then ffprobe → afconvert for other codecs. Returns None ONLY if
+    genuinely unmeasurable; callers treat that as a FAILURE, never a silent pass."""
+    for parser in (_mp4_seconds, _wav_seconds):
+        try:
+            s = parser(data)
+            if s and s > 0:
+                return s
+        except Exception:
+            pass
     path = wavp = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".audio", delete=False) as t:
@@ -97,10 +150,9 @@ def js_object(text):
 
 def check_audio_blob(label, data, out):
     secs = measure_seconds(data)
-    if secs is None:
-        if len(data) > SIZE_UNVERIFIABLE:
-            out.append(f"{label}: {len(data)//1024} KB audio, duration UNVERIFIABLE "
-                       f"(install ffprobe or afconvert, or keep the clip tiny)")
+    if secs is None:                                # couldn't evaluate → FAIL, never a silent pass
+        out.append(f"{label}: {len(data)//1024} KB audio — duration COULD NOT BE MEASURED "
+                   f"(unsupported codec; install ffprobe/ffmpeg). Unmeasured audio is a failure.")
     elif secs > MAX_VOICE_SECONDS + 0.5:
         out.append(f"{label}: {secs:.1f}s audio exceeds the {MAX_VOICE_SECONDS}s voice limit")
 
