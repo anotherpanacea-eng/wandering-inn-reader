@@ -127,6 +127,8 @@
     <label class="btn" id="syncBtn"><span class="ck" id="syncCk">○</span><span>Load sync file<small id="syncName">the .json the aligner produced</small></span>
       <input type="file" id="syncIn" accept=".json,application/json"></label>
     <button class="btn" id="startBtn" style="display:none; justify-content:center; font-weight:600;">Open reader →</button>
+    <label class="btn" id="bookBtn"><span class="ck">▦</span><span>Load a whole book<small>select all of a book's tracks + their sync files — reads continuously, track to track</small></span>
+      <input type="file" id="bookIn" multiple></label>
   </div>
 </section>
 
@@ -166,6 +168,7 @@
   let chapters=[], chapBySeg={}, curChap=-1;
   let follow=true, userScrollPause=0, isDemo=false, pendingAudioFile=null;
   let sheetKind=null;
+  let playlist=null, pendingSeek=0, pendingAutoplay=false;   // continuous multi-track book
 
   const fmt = t => { t=Math.max(0,t|0); const m=(t/60)|0, s=t%60; return m+":"+(s<10?"0":"")+s; };
   const posKey = () => "inn-reader-pos:"+(doc?doc.title:"x");
@@ -272,7 +275,8 @@
     const ci=findChap(t);
     if(ci===curChap) return;
     curChap=ci;
-    $("#nowChap").textContent = (ci>=0 && chapters[ci]) ? chapters[ci].title : (doc?doc.title:"");
+    const base = (ci>=0 && chapters[ci]) ? chapters[ci].title : (doc?doc.title:"");
+    $("#nowChap").textContent = playlist ? ("▸ "+(playlist.idx+1)+"/"+playlist.tracks.length+"  "+base) : base;
     updateMetadata();
     if(sheetKind==="chapters") markCurrentChapter();
   }
@@ -295,8 +299,8 @@
     set("seekbackward",d=>{ audio.currentTime=Math.max(0,audio.currentTime-((d&&d.seekOffset)||15)); });
     set("seekforward",d=>{ audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+((d&&d.seekOffset)||15)); });
     set("seekto",d=>{ if(d.fastSeek && "fastSeek" in audio){ audio.fastSeek(d.seekTime); return; } audio.currentTime=d.seekTime; });
-    set("previoustrack",()=>jumpChapter(-1));
-    set("nexttrack",()=>jumpChapter(1));
+    set("previoustrack",()=>{ if(playlist) prevTrack(); else jumpChapter(-1); });
+    set("nexttrack",()=>{ if(playlist) nextTrack(); else jumpChapter(1); });
   }
   function updateMetadata(){
     if(!("mediaSession" in navigator) || !("MediaMetadata" in window) || !doc) return;
@@ -327,7 +331,8 @@
   // ---------- persistence (position) ----------
   let lastSave=0;
   function save(){ const n=Date.now(); if(n-lastSave<1500) return; lastSave=n;
-    try{ localStorage.setItem(posKey(), String(audio.currentTime)); }catch(e){} }
+    try{ localStorage.setItem(posKey(), String(audio.currentTime)); }catch(e){}
+    if(playlist) savePlaylistPos(); }
   function restore(){ try{ const v=parseFloat(localStorage.getItem(posKey())); if(v>0 && v<audio.duration) audio.currentTime=v; }catch(e){} }
 
   // ---------- session store (IndexedDB) for one-tap resume ----------
@@ -428,9 +433,13 @@
     releaseWake(); save(); });
   audio.addEventListener("seeked",()=>{ const t=audio.currentTime; setSeg(findSeg(t)); setWord(t); setChap(t);
     $("#cur").textContent=fmt(t); updatePosition(); });
-  audio.addEventListener("loadedmetadata",()=>{ $("#dur").textContent=fmt(audio.duration); restore();
+  audio.addEventListener("loadedmetadata",()=>{ $("#dur").textContent=fmt(audio.duration);
+    if(playlist){ const st=Math.min(pendingSeek||0, (audio.duration||1e9)-0.1);
+      if(st>0) audio.currentTime=st; if(pendingAutoplay) audio.play(); pendingAutoplay=false; }
+    else { restore(); }
     const t=audio.currentTime; setSeg(findSeg(t)); setChap(t); $("#cur").textContent=fmt(t); updatePosition(); });
   audio.addEventListener("error",()=>{ if(audio.src) toast("Couldn't load that audio file."); });
+  audio.addEventListener("ended",()=>{ if(playlist && playlist.idx+1<playlist.tracks.length) nextTrack(); });
 
   // ---------- bottom sheet ----------
   function openSheet(kind){ sheetKind=kind; (kind==="chapters"?renderChapters:renderSettings)();
@@ -447,6 +456,16 @@
     const s=$("#sheet"); clear(s);
     s.appendChild(el("div",{class:"grip"}));
     s.appendChild(el("h2",{text:"Chapters"}));
+    if(playlist && playlist.globalChaps.length){     // whole-book menu, jumps across tracks
+      const list=el("div",{class:"clist"});
+      playlist.globalChaps.forEach(c=>{
+        const b=el("button",{}, [ el("span",{class:"ct", text:"trk "+(c.trackIdx+1)}), c.title ]);
+        if(c.trackIdx===playlist.idx) b.classList.add("cur");
+        b.onclick=()=>{ if(c.trackIdx===playlist.idx) seekTo(c.start); else loadTrack(c.trackIdx, c.start, true); closeSheet(); };
+        list.appendChild(b);
+      });
+      s.appendChild(list); return;
+    }
     if(!chapters.length){ s.appendChild(el("p",{class:"empty", text:"No chapter markers in this file."})); return; }
     const list=el("div",{class:"clist"});
     chapters.forEach((c,i)=>{
@@ -483,6 +502,81 @@
     else if(e.key==="Escape" && sheetKind) closeSheet();
   });
 
+  // ---------- continuous book (multi-track playlist) ----------
+  function parseJsonFile(file){ return new Promise((res,rej)=>{ const fr=new FileReader();
+    fr.onload=()=>{ try{ res(JSON.parse(fr.result)); }catch(err){ rej(err); } };
+    fr.onerror=()=>rej(fr.error); fr.readAsText(file); }); }
+  const trackNo = name => { const m=/(\d+)/.exec(name||""); return m ? m[1].padStart(2,"0") : (name||""); };
+
+  function buildPlaylist(files){
+    return new Promise(resolve=>{
+      const audioByNo={}, audioByName={}, syncByNo={}, syncByName={};
+      let manifestFile=null;
+      Array.from(files).forEach(f=>{
+        const n=f.name.toLowerCase();
+        if(n==="manifest.json"){ manifestFile=f; }
+        else if(/\.(mp3|m4a|m4b|aac|wav|ogg|opus|flac)$/.test(n)){ audioByNo[trackNo(f.name)]=f; audioByName[f.name]=f; }
+        else if(/\.json$/.test(n)){ syncByNo[trackNo(f.name)]=f; syncByName[f.name]=f; }
+      });
+      const finish=(book,tracks)=>{
+        const pl={book:book||"Book", tracks, idx:0, globalChaps:[]};
+        tracks.forEach((t,ti)=>{ if(Array.isArray(t.chapters)) t.chapters.forEach(c=>{
+          if(c && typeof c.start==="number") pl.globalChaps.push({title:c.title, trackIdx:ti, start:c.start}); }); });
+        playlist=pl; resolve(tracks.length);
+      };
+      const pairByNumber=()=>{
+        const nos=Object.keys(syncByNo).filter(no=>audioByNo[no]).sort();
+        finish("Book", nos.map(no=>({no, audioFile:audioByNo[no], syncFile:syncByNo[no], chapters:null})));
+      };
+      if(manifestFile){
+        parseJsonFile(manifestFile).then(man=>{
+          if(!man || !Array.isArray(man.tracks)) return pairByNumber();
+          const tracks=[];
+          man.tracks.forEach(t=>{
+            const a=audioByName[t.audio]||audioByNo[trackNo(t.audio||t.file)];
+            const s=syncByName[t.file]||syncByNo[trackNo(t.file||t.audio)];
+            if(a&&s) tracks.push({no:t.track||trackNo(t.file), audioFile:a, syncFile:s,
+                                  chapters:Array.isArray(t.chapters)?t.chapters:null});
+          });
+          tracks.length ? finish(man.book, tracks) : pairByNumber();
+        }).catch(pairByNumber);
+      } else pairByNumber();
+    });
+  }
+
+  function loadTrack(idx, seekT, autoplay){
+    if(!playlist || idx<0 || idx>=playlist.tracks.length) return;
+    playlist.idx=idx;
+    const t=playlist.tracks[idx];
+    parseJsonFile(t.syncFile).then(d=>{
+      doc=d; isDemo=false; pendingAudioFile=t.audioFile;
+      pendingSeek=Math.max(0, seekT||0); pendingAutoplay=!!autoplay;
+      build(); curSeg=-1; curChap=-1;
+      audio.src=URL.createObjectURL(t.audioFile);   // -> loadedmetadata seeks / autoplays
+      setSeg(0); setChap(0); savePlaylistPos();
+    }).catch(()=>toast("Couldn't read "+t.syncFile.name));
+  }
+  function prevTrack(){ if(playlist) loadTrack(audio.currentTime<3 ? playlist.idx-1 : playlist.idx, 0, true); }
+  function nextTrack(){ if(playlist) loadTrack(playlist.idx+1, 0, true); }
+
+  function plKey(book){ return "inn-reader-book:"+book; }
+  function savePlaylistPos(){ if(!playlist) return;
+    try{ localStorage.setItem(plKey(playlist.book),
+      JSON.stringify({idx:playlist.idx, t:audio.currentTime||0, n:playlist.tracks.length})); }catch(e){} }
+  function loadPlaylistPos(book){ try{ return JSON.parse(localStorage.getItem(plKey(book))||"null"); }catch(e){ return null; } }
+
+  function startBook(files){
+    buildPlaylist(files).then(n=>{
+      if(!n){ toast("No matching track + sync files in that selection."); return; }
+      showReaderUI();
+      const saved=loadPlaylistPos(playlist.book);
+      const startIdx=(saved && saved.idx>=0 && saved.idx<playlist.tracks.length) ? saved.idx : 0;
+      loadTrack(startIdx, saved?saved.t:0, false);
+      if(saved && (saved.idx>0 || (saved.t||0)>5)) toast("Resumed — track "+(startIdx+1)+" of "+playlist.tracks.length);
+      else toast(playlist.tracks.length+" tracks · reads continuously");
+    });
+  }
+
   // ---------- loading ----------
   let haveAudio=false, haveSync=false;
   function maybeReady(){ if(haveAudio && haveSync) $("#startBtn").style.display="flex"; }
@@ -496,15 +590,18 @@
       $("#syncCk").textContent="●"; $("#syncName").textContent=f.name; maybeReady(); }
       catch(err){ alert("Could not read that JSON: "+err.message); } }; fr.readAsText(f); });
   $("#startBtn").onclick=open;
+  $("#bookIn").addEventListener("change",e=>{ const files=e.target.files; if(files && files.length) startBook(files); });
   $("#tryDemo").onclick=()=>{ if(!window.DEMO){ alert("Demo data missing."); return; }
     isDemo=true; doc=window.DEMO.align; audio.src=window.DEMO.audioDataUri; open(); };
 
-  function open(){
-    build();
-    applyFont(fontPx()); applyRate();
-    setupMediaSession(); updateMetadata();
+  function showReaderUI(){
+    applyFont(fontPx()); applyRate(); setupMediaSession();
     $("#load").style.display="none";
     $("#top").classList.add("on"); $("#reader").classList.add("on"); $("#bar").classList.add("on");
+  }
+  function open(){            // single-file (or demo / resume) entry
+    playlist=null;
+    build(); showReaderUI(); updateMetadata();
     setSeg(0); setChap(0);
     saveSession();
   }
