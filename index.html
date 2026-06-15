@@ -171,7 +171,7 @@
   // pages (the location/nav unit) + the cursor used for read<->listen handoff
   let pages=[], pageSeg=[], curPage=-1;     // pages[i] = {seg, start}; pageSeg[i] = its first segment
   let readingSeg=-1;                        // segment at the reading anchor while paused; -1 = no divergence
-  let lastUserInput=0, scrollT=0, pendingReadSeg=-1;
+  let lastUserInput=0, scrollT=0, pendingReadSeg=-1, pausedAt=0;
   let playlist=null, pendingSeek=0, pendingAutoplay=false;   // continuous multi-track book
 
   const fmt = t => { t=Math.max(0,t|0); const m=(t/60)|0, s=t%60; return m+":"+(s<10?"0":"")+s; };
@@ -267,7 +267,9 @@
     clearTimeout(scrollT); scrollT=setTimeout(captureReadingPos,160);
   }
   function captureReadingPos(){
-    if(!audio.paused || Date.now()-lastUserInput>1500) return;   // ignore programmatic / cold-open scrolls
+    // capture only on a real reader gesture made *after* the pause — so neither the cold-open
+    // restore scroll nor a follow/seek scroll still settling from before the pause can hijack it.
+    if(!audio.paused || lastUserInput<=pausedAt) return;
     const i=segAtAnchor();
     if(i<0 || i>=segs.length) return;
     readingSeg=i; setPage(pageOf(i)); save();
@@ -405,7 +407,7 @@
       let t=NaN, seg=-1;
       if(raw.charAt(0)==="{"){ const o=JSON.parse(raw); t=+o.t; if(typeof o.seg==="number") seg=o.seg; }
       else { t=parseFloat(raw); }                       // legacy: bare seconds
-      if(seg>=0 && seg<segs.length && seg!==findSeg(t)){ // read ahead of the playhead -> resume there
+      if(seg>=0 && seg<segs.length && seg!==findSeg(t)){ // reading place differs from playhead -> resume where you were reading
         audio.currentTime=segs[seg].start; pendingReadSeg=seg;
       } else if(t>0 && t<audio.duration){ audio.currentTime=t; }
     }catch(e){}
@@ -518,7 +520,7 @@
     acquireWake(); cancelAnimationFrame(rafId); rafId=requestAnimationFrame(tick); });
   audio.addEventListener("pause",()=>{ $("#play").textContent="▶";
     if("mediaSession" in navigator) navigator.mediaSession.playbackState="paused";
-    readingSeg=-1;                       // fresh pause: no reading divergence until you scroll
+    readingSeg=-1; pausedAt=Date.now();  // fresh pause: no divergence until a post-pause reader gesture
     releaseWake(); save(); });
   audio.addEventListener("seeked",()=>{ const t=audio.currentTime; readingSeg=-1;  // explicit audio move
     setSeg(findSeg(t)); setWord(t); setChap(t);
@@ -526,7 +528,7 @@
   audio.addEventListener("loadedmetadata",()=>{ $("#dur").textContent=fmt(audio.duration);
     if(playlist){ let st=Math.min(pendingSeek||0, (audio.duration||1e9)-0.1);
       if(pendingReadSeg>=0 && pendingReadSeg<segs.length && pendingReadSeg!==findSeg(st))
-        st=segs[pendingReadSeg].start;                  // read ahead of the audio -> resume there
+        st=segs[pendingReadSeg].start;                  // reading place differs from the audio -> resume there
       if(st>0) audio.currentTime=st; if(pendingAutoplay) audio.play().catch(()=>{}); pendingAutoplay=false; }
     else { restore(); }
     const t=audio.currentTime; setSeg(findSeg(t)); setChap(t); $("#cur").textContent=fmt(t); updatePosition();
@@ -534,7 +536,9 @@
       const p=pageOf(pendingReadSeg), el=segEls[pages[p].seg];
       setPage(p); if(el) $("#reader").scrollTo({top:Math.max(0,el.offsetTop-12)});
       pendingReadSeg=-1;
-    } });
+    }
+    lastSave=0; save();                // persist the freshly-restored position now (no zeroed pre-seek write)
+  });
   audio.addEventListener("error",()=>{ if(audio.src) toast("Couldn't load that audio file."); });
   audio.addEventListener("ended",()=>{ if(playlist && playlist.idx+1<playlist.tracks.length) nextTrack(); });
 
@@ -596,8 +600,8 @@
     if(e.key===" "){ e.preventDefault(); $("#play").click(); }
     else if(e.key==="ArrowLeft"){ $("#back").click(); }
     else if(e.key==="ArrowRight"){ $("#fwd").click(); }
-    else if(e.key==="PageDown"){ e.preventDefault(); turnPage(1); }
-    else if(e.key==="PageUp"){ e.preventDefault(); turnPage(-1); }
+    else if(e.key==="PageDown" && pages.length>1){ e.preventDefault(); turnPage(1); }
+    else if(e.key==="PageUp" && pages.length>1){ e.preventDefault(); turnPage(-1); }
     else if(e.key==="Escape" && sheetKind) closeSheet();
   });
 
@@ -656,8 +660,8 @@
       build(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
       if(curObjUrl) URL.revokeObjectURL(curObjUrl);   // free the previous track's blob URL
       curObjUrl=URL.createObjectURL(t.audioFile);
-      audio.src=curObjUrl;                    // -> loadedmetadata seeks / autoplays
-      setSeg(0); setChap(0); savePlaylistPos();
+      audio.src=curObjUrl;                    // -> loadedmetadata seeks / autoplays, then persists
+      setSeg(0); setChap(0);
     }).catch(()=>{ if(token===loadToken) toast("Couldn't read "+t.syncFile.name); });
   }
   function prevTrack(){ if(playlist) loadTrack(audio.currentTime<3 ? playlist.idx-1 : playlist.idx, 0, true); }
