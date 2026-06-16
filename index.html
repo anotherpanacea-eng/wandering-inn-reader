@@ -220,6 +220,16 @@
     });
     r.appendChild(frag);
     buildPages();
+    wireReader();
+  }
+
+  // Bind the persistent #reader once. build() rebuilds its children on every track load / open, but
+  // the node (and listeners on it) survive clear(); registering per-build would stack duplicate swipe
+  // handlers, so after a few tracks one swipe would fire turnPage() several times and skip pages.
+  let readerWired=false;
+  function wireReader(){
+    if(readerWired) return; readerWired=true;
+    const r=$("#reader");
     r.addEventListener("scroll",onReaderScroll,{passive:true});
     r.addEventListener("wheel",()=>{ lastUserInput=Date.now(); },{passive:true});
     r.addEventListener("pointerdown",()=>{ lastUserInput=Date.now(); },{passive:true});
