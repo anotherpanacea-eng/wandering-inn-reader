@@ -115,12 +115,14 @@ def emission_for(model, device, samples, sub_sec, sr, torch):
     step = int(sub_sec * sr)
     for i in range(0, len(samples), step):
         chunk = samples[i:i + step]
-        if len(chunk) < sr // 2 and pieces:          # tiny tail: fold into nothing, skip
-            pass
+        if len(chunk) < sr // 2 and pieces:          # tiny trailing sub-chunk: SKIP -- feeding a <0.5s
+            continue                                 # chunk to the model risks a degenerate emission frame
         x = torch.from_numpy(chunk).unsqueeze(0).to(device)
         with torch.inference_mode():
             emi, _ = model(x)
         pieces.append(emi.cpu())
+    if not pieces:
+        return None
     return torch.cat(pieces, dim=1)                  # (1, F, V) on CPU
 
 def save_ckpt(path, pos_in_align, audio_pos, word_time):
@@ -128,7 +130,10 @@ def save_ckpt(path, pos_in_align, audio_pos, word_time):
     box a hard THERMAL reboot mid-write left a full-size but ALL-ZERO file (data sat in the page
     cache, never flushed) so --resume was impossible. Fix: fsync the temp file's DATA to the SSD
     BEFORE the rename, and demote the previous good checkpoint to .bak so even a torn final rename
-    still leaves a usable fallback. Write to a LOCAL, NON-Dropbox, COOL drive."""
+    still leaves a usable fallback. No-op if `path` is falsy (the watchdog's save_fn can fire even when the
+    run has no --checkpoint). Write to a LOCAL, NON-Dropbox, COOL drive."""
+    if not path:
+        return
     tmp = path + ".tmp"
     with open(tmp, "wb") as f:
         pickle.dump({"pos": pos_in_align, "audio_pos": audio_pos, "word_time": word_time},
@@ -230,8 +235,14 @@ def main():
     ap.add_argument("--window", type=float, default=150.0)
     ap.add_argument("--safety", type=float, default=12.0)
     ap.add_argument("--sub", type=float, default=30.0)
-    ap.add_argument("--wps", type=float, default=2.9, help="words/sec estimate")
-    ap.add_argument("--overprovide", type=float, default=1.5)
+    ap.add_argument("--wps", type=float, default=2.5,
+                    help="words/sec the narration ACTUALLY runs at; sets text provisioned per window "
+                         "(grab = window*wps*overprovide). OVER-provisioning DRIFTS: forced_align compresses "
+                         "the excess and commits it too early (measured ~1.68x text-over-run at the old "
+                         "2.9 x 1.5 default; 2.5 x 1.0 tracked 1.00x on real audio). Err LOW -- under-"
+                         "provisioning just takes smaller, self-correcting steps; over-provisioning doesn't.")
+    ap.add_argument("--overprovide", type=float, default=1.0,
+                    help="multiplier on text provisioned per window; keep ~1.0 (see --wps).")
     ap.add_argument("--max-seconds", type=float, default=None, help="debug: stop after N audio sec")
     ap.add_argument("--checkpoint", help="path to a resume checkpoint (LOCAL dir, not Dropbox)")
     ap.add_argument("--resume", action="store_true", help="resume from --checkpoint if present")
@@ -283,6 +294,10 @@ def main():
             stream.fast_forward(c["audio_pos"]); cool_anchor = c["audio_pos"]
             print(f"  RESUMED from {os.path.basename(a.checkpoint)}: {pos_in_align}/{len(align_idx)} words, "
                   f"audio at {c['audio_pos']/60:.1f}min", file=sys.stderr)
+    elif a.checkpoint and (os.path.exists(a.checkpoint) or os.path.exists(a.checkpoint + ".bak")):
+        print(f"  ! a checkpoint exists at {a.checkpoint} but --resume was NOT passed -- starting FRESH "
+              f"(it will be overwritten, then removed on success). Pass --resume to continue the prior run.",
+              file=sys.stderr)
 
     step = 0
     while pos_in_align < len(align_idx):
@@ -297,6 +312,8 @@ def main():
             break
         words = [tokens[i]["nw"] for i in a_take]
         emission = emission_for(model, dev, samples, a.sub, sr, torch)
+        if emission is None or emission.size(1) == 0:    # degenerate tail -> no usable frames, stop
+            break
         try:
             spans = aligner(emission[0], tokenizer(words))   # CPU
         except Exception as e:
@@ -370,7 +387,8 @@ def main():
 
     doc = {"title": a.title, "audio": os.path.basename(a.audio[0]), "segments": segments}
     if a.chapters:
-        markers = json.load(open(a.chapters, encoding="utf-8"))
+        with open(a.chapters, encoding="utf-8") as _cf:
+            markers = json.load(_cf)
         chs = []
         for m in markers:
             seg = m.get("seg", m.get("first_line"))
@@ -380,7 +398,8 @@ def main():
         if chs: doc["chapters"] = chs
 
     validate_doc(doc, source=a.out)        # fail loud on a malformed envelope before writing
-    json.dump(doc, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    with open(a.out, "w", encoding="utf-8") as _of:
+        json.dump(doc, _of, ensure_ascii=False, indent=2)
     if a.checkpoint and os.path.exists(a.checkpoint):
         try: os.remove(a.checkpoint)            # completed cleanly; drop the resume file
         except OSError: pass
