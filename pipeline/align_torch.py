@@ -30,6 +30,7 @@ Dependencies:  pip3 install torch torchaudio   (the MMS_FA model is CC-BY-NC —
 fine for personal read-along, not for resale; see the README's license note.)
 """
 import argparse, json, re, sys
+from schema import validate_doc
 
 # MMS_FA is trained on lowercased text over a small Latin charset. Map display
 # words to that space for alignment; keep the original spelling for the player.
@@ -211,6 +212,7 @@ def main():
         if chapters:
             doc["chapters"] = chapters
 
+    validate_doc(doc, source=a.out)        # fail loud on a malformed envelope before writing
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, indent=2)
     nwords = sum(len(s["words"]) for s in segs)

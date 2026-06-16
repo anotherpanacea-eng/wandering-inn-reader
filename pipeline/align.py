@@ -29,6 +29,7 @@ list of {"word"/"w", "start"/"s", "end"/"e"} and the script will pack words into
 their containing sentences by time.
 """
 import argparse, json, sys, re
+from schema import validate_doc
 
 def load(p):
     with open(p, "r", encoding="utf-8") as f:
@@ -122,6 +123,7 @@ def main():
     if chapters:
         doc["chapters"] = chapters
 
+    validate_doc(doc, source=a.out)        # fail loud on a malformed envelope before writing
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, indent=2)
     nwords = sum(len(s["words"]) for s in segs)
