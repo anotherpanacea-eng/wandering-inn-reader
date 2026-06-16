@@ -52,7 +52,7 @@
   #nowChap{flex:1; text-align:center; font:600 .9rem/1.2 Georgia,serif; color:var(--dim);
            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 4px;}
   /* ---- reader ---- */
-  #reader{flex:1; overflow-y:auto; padding:18px 20px 40vh; display:none; scroll-behavior:smooth;
+  #reader{flex:1; position:relative; overflow-y:auto; padding:18px 20px 40vh; display:none; scroll-behavior:smooth;
           -webkit-overflow-scrolling:touch;}
   #reader.on{display:block;}
   #docTitle{font:600 1.15rem/1.3 Georgia,serif; color:var(--dim); margin:6px 2px 20px; letter-spacing:.01em;}
@@ -168,6 +168,10 @@
   let chapters=[], chapBySeg={}, curChap=-1;
   let follow=true, userScrollPause=0, isDemo=false, pendingAudioFile=null;
   let sheetKind=null;
+  // pages (the location/nav unit) + the cursor used for read<->listen handoff
+  let pages=[], pageSeg=[], curPage=-1;     // pages[i] = {seg, start}; pageSeg[i] = its first segment
+  let readingSeg=-1;                        // segment at the reading anchor while paused; -1 = no divergence
+  let lastUserInput=0, scrollT=0, pendingReadSeg=-1, pausedAt=0;
   let playlist=null, pendingSeek=0, pendingAutoplay=false;   // continuous multi-track book
 
   const fmt = t => { t=Math.max(0,t|0); const m=(t/60)|0, s=t%60; return m+":"+(s<10?"0":"")+s; };
@@ -215,8 +219,79 @@
       segStart.push(sg.start); segEls.push(e); frag.appendChild(e);
     });
     r.appendChild(frag);
-    r.addEventListener("scroll",()=>{ userScrollPause=Date.now()+2500; },{passive:true});
+    buildPages();
+    wireReader();
+  }
+
+  // Bind the persistent #reader once. build() rebuilds its children on every track load / open, but
+  // the node (and listeners on it) survive clear(); registering per-build would stack duplicate swipe
+  // handlers, so after a few tracks one swipe would fire turnPage() several times and skip pages.
+  let readerWired=false;
+  function wireReader(){
+    if(readerWired) return; readerWired=true;
+    const r=$("#reader");
+    r.addEventListener("scroll",onReaderScroll,{passive:true});
+    r.addEventListener("wheel",()=>{ lastUserInput=Date.now(); },{passive:true});
+    r.addEventListener("pointerdown",()=>{ lastUserInput=Date.now(); },{passive:true});
     r.addEventListener("click",onTap);
+    let tsx=0,tsy=0,tst=0;
+    r.addEventListener("touchstart",e=>{ const t=e.changedTouches[0]; tsx=t.clientX; tsy=t.clientY;
+      tst=Date.now(); lastUserInput=tst; },{passive:true});
+    r.addEventListener("touchend",e=>{ const t=e.changedTouches[0], dx=t.clientX-tsx, dy=t.clientY-tsy;
+      if(Date.now()-tst<600 && Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.6) turnPage(dx<0?1:-1); },{passive:true});
+  }
+
+  // ---------- pages (location unit; logical scroll anchors over the continuous reader) ----------
+  const WORDS_PER_PAGE=280;
+  function buildPages(){
+    pages=[]; pageSeg=[]; curPage=-1;
+    let words=0;
+    segs.forEach((sg,i)=>{
+      if(i===0 || (i in chapBySeg) || words>=WORDS_PER_PAGE){   // chapter start always begins a page
+        pages.push({seg:i, start:sg.start}); pageSeg.push(i); words=0;
+      }
+      words += (sg.text.match(/\S+/g)||[]).length;
+    });
+  }
+  function pageOf(s){
+    let lo=0,hi=pageSeg.length-1,ans=0;
+    while(lo<=hi){ const m=(lo+hi)>>1; if(pageSeg[m]<=s){ans=m;lo=m+1;} else hi=m-1; }
+    return ans;
+  }
+  function setPage(p){ if(p===curPage) return; curPage=p; updateTopBar(); }
+  function updateTopBar(){
+    const base = (curChap>=0 && chapters[curChap]) ? chapters[curChap].title : (doc?doc.title:"");
+    const lead = playlist ? ("▸ "+(playlist.idx+1)+"/"+playlist.tracks.length+"  ") : "";
+    const pg = (pages.length>1 && curPage>=0) ? ("  ·  p"+(curPage+1)+"/"+pages.length) : "";
+    $("#nowChap").textContent = lead + base + pg;
+  }
+  function segAtAnchor(){   // the segment crossing a line ~1/4 down the reader = what you're reading
+    const r=$("#reader"), anchor=r.scrollTop + r.clientHeight*0.25;
+    let lo=0,hi=segEls.length-1,ans=0;
+    while(lo<=hi){ const m=(lo+hi)>>1; if(segEls[m].offsetTop<=anchor){ans=m;lo=m+1;} else hi=m-1; }
+    return ans;
+  }
+  function onReaderScroll(){
+    userScrollPause=Date.now()+2500;        // suspend playback auto-follow briefly (unchanged)
+    if(!audio.paused) return;               // only the paused reader feeds the cursor
+    clearTimeout(scrollT); scrollT=setTimeout(captureReadingPos,160);
+  }
+  function captureReadingPos(){
+    // capture only on a real reader gesture made *after* the pause — so neither the cold-open
+    // restore scroll nor a follow/seek scroll still settling from before the pause can hijack it.
+    if(!audio.paused || lastUserInput<=pausedAt) return;
+    const i=segAtAnchor();
+    if(i<0 || i>=segs.length) return;
+    readingSeg=i; setPage(pageOf(i)); save();
+  }
+  function turnPage(dir){
+    if(pages.length<2) return;
+    lastUserInput=Date.now();
+    const target=Math.max(0,Math.min(pages.length-1,(curPage<0?0:curPage)+dir));
+    const el=segEls[pages[target].seg]; if(!el) return;
+    $("#reader").scrollTo({top:Math.max(0,el.offsetTop-12), behavior:"smooth"});
+    if(audio.paused){ readingSeg=pages[target].seg; save(); }
+    setPage(target);
   }
 
   function onTap(e){
@@ -260,6 +335,7 @@
     p.classList.add("cur"); p.classList.remove("read");
     for(let k=0;k<i;k++) segEls[k].classList.add("read");
     if(follow && Date.now()>userScrollPause) p.scrollIntoView({block:"center",behavior:"smooth"});
+    setPage(pageOf(i));
   }
   function setWord(t){
     if(!curWordEls) return;
@@ -275,8 +351,7 @@
     const ci=findChap(t);
     if(ci===curChap) return;
     curChap=ci;
-    const base = (ci>=0 && chapters[ci]) ? chapters[ci].title : (doc?doc.title:"");
-    $("#nowChap").textContent = playlist ? ("▸ "+(playlist.idx+1)+"/"+playlist.tracks.length+"  "+base) : base;
+    updateTopBar();
     updateMetadata();
     if(sheetKind==="chapters") markCurrentChapter();
   }
@@ -294,7 +369,7 @@
     if(!("mediaSession" in navigator)) return;
     const ms=navigator.mediaSession;
     const set=(a,fn)=>{ try{ ms.setActionHandler(a,fn); }catch(e){} };
-    set("play",()=>audio.play());
+    set("play",()=>resumePlay());
     set("pause",()=>audio.pause());
     set("seekbackward",d=>{ audio.currentTime=Math.max(0,audio.currentTime-((d&&d.seekOffset)||15)); });
     set("seekforward",d=>{ audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+((d&&d.seekOffset)||15)); });
@@ -329,11 +404,24 @@
   }
 
   // ---------- persistence (position) ----------
+  // One canonical position per doc: {t} for listening precision, {seg} for the reading place.
+  // While paused with the reader scrolled ahead, `seg` is the furthest point and wins on restore.
   let lastSave=0;
+  function posSeg(){ return (audio.paused && readingSeg>=0) ? readingSeg : curSeg; }
   function save(){ const n=Date.now(); if(n-lastSave<1500) return; lastSave=n;
-    try{ localStorage.setItem(posKey(), String(audio.currentTime)); }catch(e){}
+    try{ localStorage.setItem(posKey(), JSON.stringify({t:audio.currentTime, seg:posSeg()})); }catch(e){}
     if(playlist) savePlaylistPos(); }
-  function restore(){ try{ const v=parseFloat(localStorage.getItem(posKey())); if(v>0 && v<audio.duration) audio.currentTime=v; }catch(e){} }
+  function restore(){
+    try{
+      const raw=localStorage.getItem(posKey()); if(!raw) return;
+      let t=NaN, seg=-1;
+      if(raw.charAt(0)==="{"){ const o=JSON.parse(raw); t=+o.t; if(typeof o.seg==="number") seg=o.seg; }
+      else { t=parseFloat(raw); }                       // legacy: bare seconds
+      if(seg>=0 && seg<segs.length && seg!==findSeg(t)){ // reading place differs from playhead -> resume where you were reading
+        audio.currentTime=segs[seg].start; pendingReadSeg=seg;
+      } else if(t>0 && t<audio.duration){ audio.currentTime=t; }
+    }catch(e){}
+  }
 
   // ---------- session store (IndexedDB) for one-tap resume ----------
   const DB="inn-reader", STORE="session";
@@ -390,6 +478,11 @@
     if(sheetKind==="settings") renderSettings(); }
   document.addEventListener("visibilitychange",()=>{ if(!document.hidden && !audio.paused) acquireWake(); });
 
+  // ---------- flush the saved position when leaving (throttle would otherwise drop the last move) ----------
+  function flushSave(){ if(!doc) return; lastSave=0; save(); }
+  window.addEventListener("pagehide", flushSave);
+  document.addEventListener("visibilitychange",()=>{ if(document.hidden) flushSave(); });
+
   // ---------- sleep timer ----------
   let sleepMode="off", sleepAt=0, sleepChapterEnd=Infinity;
   function setSleep(mode){
@@ -413,7 +506,14 @@
   }
 
   // ---------- transport ----------
-  $("#play").onclick=()=>{ if(audio.paused){audio.play();} else {audio.pause();} };
+  // The read->listen handoff: if you read ahead while paused, play continues from the reading place.
+  function resumePlay(){
+    if(readingSeg>=0 && segs[readingSeg] && readingSeg!==findSeg(audio.currentTime))
+      audio.currentTime=segs[readingSeg].start+0.001;
+    readingSeg=-1;
+    audio.play();
+  }
+  $("#play").onclick=()=>{ if(audio.paused){resumePlay();} else {audio.pause();} };
   $("#back").onclick=()=>{ audio.currentTime=Math.max(0,audio.currentTime-15); };
   $("#fwd").onclick =()=>{ audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+15); };
   const rates=[0.8,1,1.25,1.5,2], RATE_KEY="inn-reader-rate";
@@ -430,14 +530,25 @@
     acquireWake(); cancelAnimationFrame(rafId); rafId=requestAnimationFrame(tick); });
   audio.addEventListener("pause",()=>{ $("#play").textContent="▶";
     if("mediaSession" in navigator) navigator.mediaSession.playbackState="paused";
+    readingSeg=-1; pausedAt=Date.now();  // fresh pause: no divergence until a post-pause reader gesture
     releaseWake(); save(); });
-  audio.addEventListener("seeked",()=>{ const t=audio.currentTime; setSeg(findSeg(t)); setWord(t); setChap(t);
+  audio.addEventListener("seeked",()=>{ const t=audio.currentTime; readingSeg=-1;  // explicit audio move
+    setSeg(findSeg(t)); setWord(t); setChap(t);
     $("#cur").textContent=fmt(t); updatePosition(); });
   audio.addEventListener("loadedmetadata",()=>{ $("#dur").textContent=fmt(audio.duration);
-    if(playlist){ const st=Math.min(pendingSeek||0, (audio.duration||1e9)-0.1);
+    if(playlist){ let st=Math.min(pendingSeek||0, (audio.duration||1e9)-0.1);
+      if(pendingReadSeg>=0 && pendingReadSeg<segs.length && pendingReadSeg!==findSeg(st))
+        st=segs[pendingReadSeg].start;                  // reading place differs from the audio -> resume there
       if(st>0) audio.currentTime=st; if(pendingAutoplay) audio.play().catch(()=>{}); pendingAutoplay=false; }
     else { restore(); }
-    const t=audio.currentTime; setSeg(findSeg(t)); setChap(t); $("#cur").textContent=fmt(t); updatePosition(); });
+    const t=audio.currentTime; setSeg(findSeg(t)); setChap(t); $("#cur").textContent=fmt(t); updatePosition();
+    if(pendingReadSeg>=0){              // open on the page we were last reading
+      const p=pageOf(pendingReadSeg), el=segEls[pages[p].seg];
+      setPage(p); if(el) $("#reader").scrollTo({top:Math.max(0,el.offsetTop-12)});
+      pendingReadSeg=-1;
+    }
+    lastSave=0; save();                // persist the freshly-restored position now (no zeroed pre-seek write)
+  });
   audio.addEventListener("error",()=>{ if(audio.src) toast("Couldn't load that audio file."); });
   audio.addEventListener("ended",()=>{ if(playlist && playlist.idx+1<playlist.tracks.length) nextTrack(); });
 
@@ -499,6 +610,8 @@
     if(e.key===" "){ e.preventDefault(); $("#play").click(); }
     else if(e.key==="ArrowLeft"){ $("#back").click(); }
     else if(e.key==="ArrowRight"){ $("#fwd").click(); }
+    else if(e.key==="PageDown" && pages.length>1){ e.preventDefault(); turnPage(1); }
+    else if(e.key==="PageUp" && pages.length>1){ e.preventDefault(); turnPage(-1); }
     else if(e.key==="Escape" && sheetKind) closeSheet();
   });
 
@@ -554,11 +667,11 @@
       if(token!==loadToken) return;           // a newer loadTrack superseded this one
       doc=d; isDemo=false; pendingAudioFile=t.audioFile;
       pendingSeek=Math.max(0, seekT||0); pendingAutoplay=!!autoplay;
-      build(); curSeg=-1; curChap=-2;         // -2 (not -1) so setChap always re-runs, even on chapterless tracks
+      build(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
       if(curObjUrl) URL.revokeObjectURL(curObjUrl);   // free the previous track's blob URL
       curObjUrl=URL.createObjectURL(t.audioFile);
-      audio.src=curObjUrl;                    // -> loadedmetadata seeks / autoplays
-      setSeg(0); setChap(0); savePlaylistPos();
+      audio.src=curObjUrl;                    // -> loadedmetadata seeks / autoplays, then persists
+      setSeg(0); setChap(0);
     }).catch(()=>{ if(token===loadToken) toast("Couldn't read "+t.syncFile.name); });
   }
   function prevTrack(){ if(playlist) loadTrack(audio.currentTime<3 ? playlist.idx-1 : playlist.idx, 0, true); }
@@ -567,7 +680,7 @@
   function plKey(book){ return "inn-reader-book:"+book; }
   function savePlaylistPos(){ if(!playlist) return;
     try{ localStorage.setItem(plKey(playlist.book),
-      JSON.stringify({idx:playlist.idx, t:audio.currentTime||0, n:playlist.tracks.length})); }catch(e){} }
+      JSON.stringify({idx:playlist.idx, t:audio.currentTime||0, seg:posSeg(), n:playlist.tracks.length})); }catch(e){} }
   function loadPlaylistPos(book){ try{ return JSON.parse(localStorage.getItem(plKey(book))||"null"); }catch(e){ return null; } }
 
   function startBook(files){
@@ -576,6 +689,7 @@
       showReaderUI();
       const saved=loadPlaylistPos(playlist.book);
       const startIdx=(saved && saved.idx>=0 && saved.idx<playlist.tracks.length) ? saved.idx : 0;
+      if(saved && typeof saved.seg==="number") pendingReadSeg=saved.seg;   // resume on the page last read
       loadTrack(startIdx, saved?saved.t:0, false);
       if(saved && (saved.idx>0 || (saved.t||0)>5)) toast("Resumed — track "+(startIdx+1)+" of "+playlist.tracks.length);
       else toast(playlist.tracks.length+" tracks · reads continuously");
