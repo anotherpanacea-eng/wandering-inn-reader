@@ -10,6 +10,7 @@ __pycache__/
 pipeline/*.json
 pipeline/*.txt
 !pipeline/book12_chapters.txt
+!pipeline/book12_track_map.json
 sync*.json
 align*.json
 volume*.mp3
