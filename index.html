@@ -828,7 +828,13 @@
       toast(tracks.length+" tracks · streaming from Dropbox");
     }catch(e){ dbxMsg("<small>Couldn't open “"+name+"”: "+e.message+"</small>"); }
   }
-  $("#dbxBtn").onclick = () => { localStorage.getItem("dbx-refresh") ? dbxBrowse() : dbxAuthStart(); };
+  $("#dbxBtn").onclick = async () => {
+    try {
+      dbxMsg("<small>Connecting to Dropbox…</small>");      // immediate feedback so a click is never silent
+      if(localStorage.getItem("dbx-refresh")) await dbxBrowse();
+      else await dbxAuthStart();                            // -> redirects to Dropbox (or throws, caught below)
+    } catch(e){ dbxMsg("<small>Dropbox error: "+((e && e.message) || e)+"</small>"); }
+  };
   (function(){                                  // complete the OAuth redirect on return
     const p = new URLSearchParams(location.search);
     if(p.get("code") && sessionStorage.getItem("dbx-verifier")){
