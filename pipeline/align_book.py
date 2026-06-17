@@ -314,10 +314,36 @@ def main():
         emission = emission_for(model, dev, samples, a.sub, sr, torch)
         if emission is None or emission.size(1) == 0:    # degenerate tail -> no usable frames, stop
             break
-        try:
-            spans = aligner(emission[0], tokenizer(words))   # CPU
-        except Exception as e:
-            sys.exit(f"aligner failed at step {step}: {e}")
+        # CTC needs emission_frames >= target_tokens + repeats. At the END of the audio the buffer can't
+        # refill to a full WINDOW, so the emission is SHORT while `grab` words is fixed -> the queued text
+        # can tokenize to more tokens than the short tail can hold ("targets length is too long for CTC").
+        # Trim the queued words to what fits; the trimmed-off tail stays queued (if the audio is truly
+        # ending it's the expected leftover the coverage check reports, not a crash).
+        spans, nfit = None, len(words)
+        while nfit > 0:
+            try:
+                spans = aligner(emission[0], tokenizer(words[:nfit]))   # CPU
+                break
+            except Exception as e:                       # keep the FRAMED fail-loud message for any non-CTC
+                msg = str(e)                             # aligner error (don't let a raw traceback escape)
+                if "too long for CTC" not in msg:
+                    sys.exit(f"aligner failed at step {step}: {e}")
+                if nfit <= 1:                            # even ONE word won't fit this tiny tail emission ->
+                    nfit = 0; break                      # give up this window (words stay queued; outer break)
+                m = re.search(r"log_probs length:\s*(\d+).+?targets length:\s*(\d+).+?repeats:\s*(\d+)", msg)
+                if m:
+                    F, T, R = (int(x) for x in m.groups())
+                    tpw = max(1.0, T / nfit)             # avg CTC tokens per queued word
+                    drop = max(1, int((T + R - F) / tpw) + 2)
+                else:
+                    drop = max(1, nfit - int(nfit * 0.85))
+                nfit = max(1, nfit - drop)               # nfit was >= 2, drop >= 1 -> STRICTLY decreases (no hang)
+        if spans is None:                                # couldn't fit even one word -> no usable audio here
+            break
+        if nfit < len(a_take):                           # short tail held only a prefix; re-queue the rest
+            print(f"  (step {step}: short tail window held {nfit}/{len(a_take)} queued words; rest re-queued)",
+                  file=sys.stderr)
+            a_take = a_take[:nfit]
         ratio = len(samples) / emission.size(1) / sr
         accept_thresh = (wstart + wlen) if is_final else (wstart + wlen - safety)
 
