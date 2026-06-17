@@ -16,12 +16,14 @@ Contract:
                    "words": [ {"w": str, "s": float>=0, "e": float>=s} ]? } ]   # words optional
   }
 """
+import math
+
 
 class SchemaError(ValueError):
     """Raised by validate_doc(strict=True) when the doc has any ERROR-level problem."""
 
-def _num(x):
-    return isinstance(x, (int, float)) and not isinstance(x, bool)
+def _num(x):                                    # reject NaN/Infinity -- json.dump emits them and the
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)  # browser JSON.parse chokes
 
 def validate_doc(doc, source="", *, strict=True):
     """Validate a player doc. Returns a list of (level, message) tuples ("ERROR"/"WARN").

@@ -367,8 +367,12 @@ def main():
     seg_tokens = {}
     for i, t in enumerate(tokens):
         seg_tokens.setdefault(t["seg"], []).append(i)
+    # Trim TRAILING sentences whose audio never played (audio ran out before the text): otherwise they
+    # become zero-width "ghost" segments at the audio end that split_tracks would pile onto the final track.
+    last_real_seg = max((tokens[i]["seg"] for i, wt in enumerate(word_time) if isinstance(wt, tuple)),
+                        default=-1)
     segments, last_end = [], 0.0
-    for si in range(len(sentences)):
+    for si in range(last_real_seg + 1):
         idxs = seg_tokens.get(si, [])
         seed = next((word_time[i][0] for i in idxs if isinstance(word_time[i], tuple)), last_end)
         prev = seed; words_out = []
@@ -400,9 +404,10 @@ def main():
     validate_doc(doc, source=a.out)        # fail loud on a malformed envelope before writing
     with open(a.out, "w", encoding="utf-8") as _of:
         json.dump(doc, _of, ensure_ascii=False, indent=2)
-    if a.checkpoint and os.path.exists(a.checkpoint):
-        try: os.remove(a.checkpoint)            # completed cleanly; drop the resume file
-        except OSError: pass
+    if a.checkpoint:                            # completed cleanly; drop EVERY resume file so a later
+        for _ck in (a.checkpoint, a.checkpoint + ".bak", a.checkpoint + ".tmp"):   # rerun starts FRESH,
+            try: os.remove(_ck)                 # not from a stale .bak (load_ckpt accepts .bak).
+            except OSError: pass
     naligned = sum(1 for w in word_time if isinstance(w, tuple))
     print(f"Wrote {a.out}: {len(segments)} sentences, {naligned}/{len(align_idx)} words aligned, "
           f"{len(doc.get('chapters', []))} chapters, {last_end/60:.1f} min.", file=sys.stderr)
