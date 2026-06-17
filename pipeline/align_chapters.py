@@ -95,6 +95,10 @@ def main():
     ap.add_argument("--between-cooldown", type=float, default=45.0, help="idle seconds between chapters")
     ap.add_argument("--smartctl", help="path to smartctl.exe -> passed to align_book's drive-temp watchdog")
     ap.add_argument("--smartctl-dev", default="/dev/sdb")
+    ap.add_argument("--allow-undercover", action="store_true",
+                    help="pass through to align_book: accept a chapter whose text legitimately ends before "
+                         "its audio (otherwise a >2%% audio-coverage gap fails the run -- a missing text "
+                         "slice or wrong track map shouldn't pass as 'done')")
     ap.add_argument("--dry-run", action="store_true", help="print the per-chapter plan and exit (no GPU)")
     a = ap.parse_args()
 
@@ -132,7 +136,7 @@ def main():
         sys.exit(2)
 
     t_run0 = time.time()
-    done, skipped, flagged = 0, 0, []
+    done, skipped = 0, 0
     for i, title, tracks, s0, s1 in plan:
         out = os.path.join(a.outdir, f"chap{i:02d}_{slug(title)}.json")
         txt = os.path.join(a.outdir, f"chap{i:02d}_{slug(title)}.txt")
@@ -157,24 +161,33 @@ def main():
                "--cooldown-every", str(a.cooldown_every), "--cooldown", str(a.cooldown)]
         if a.smartctl:
             cmd += ["--smartctl", a.smartctl, "--smartctl-dev", a.smartctl_dev]
+        if a.allow_undercover:
+            cmd += ["--allow-undercover"]
         t0 = time.time()
         rc = subprocess.run(cmd).returncode
         dt = (time.time() - t0) / 60
         if rc == 0:
             print(f"     OK   {title} in {dt:.1f} min", flush=True); done += 1
-        elif rc == 3:                                    # align_book writes the JSON BEFORE the coverage check,
-            print(f"     OK*  {title} in {dt:.1f} min -- COVERAGE GAP flagged (file written, inspect)",
-                  flush=True)                            # so exit 3 = written-but-trailing-audio-unaligned
-            flagged.append(title); done += 1
+        elif rc == 3:
+            # COVERAGE GAP: align_book found >2% of THIS chapter's audio has no text aligned to it (a
+            # missing text slice or a wrong track map), and it wrote a file BEFORE failing. Do NOT accept
+            # it as done -- delete that file so a re-run RE-ATTEMPTS instead of silently skipping a gapped
+            # chapter (a present+valid JSON would otherwise be skipped), then fail loud. Pass
+            # --allow-undercover only if the text legitimately ends before the audio -> align_book then
+            # exits 0 and we never reach here.
+            try:
+                os.remove(out)
+            except OSError:
+                pass
+            sys.exit(f"     FAIL {title}: align_book COVERAGE GAP (exit 3) -- >2% of the audio has NO text "
+                     f"(missing slice / wrong track map?). Removed {os.path.basename(out)}. Fix the inputs, or "
+                     f"pass --allow-undercover if the text legitimately ends before the audio. Re-run resumes.")
         else:
             sys.exit(f"     FAIL {title}: align_book exit {rc} -- aborting (fix and re-run; finished chapters skip)")
         time.sleep(a.between_cooldown)
 
     print(f"\n=== DONE: {done} aligned, {skipped} skipped, {len(plan)} total in {(time.time()-t_run0)/60:.1f} min ===",
           flush=True)
-    if flagged:
-        print("Coverage-gap chapters (trailing audio unaligned -- usually a chapter-end author note): "
-              + ", ".join(flagged), flush=True)
 
 
 if __name__ == "__main__":
