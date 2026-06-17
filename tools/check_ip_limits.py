@@ -18,6 +18,16 @@ measured (no ffprobe/afconvert), that's a failure, not a pass.
 """
 import base64, json, os, re, subprocess, sys, tempfile, wave
 
+# A cp1252 Windows console can't encode this tool's status glyphs (the <=, em-dash and ->
+# in its messages), so print() -- and therefore the pre-commit hook -- used to crash even
+# when the check PASSED. Force UTF-8 output so the check's RESULT decides the exit status,
+# not the console encoding.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 MAX_VOICE_SECONDS = 20
 MAX_PROSE_WORDS   = 500
 
