@@ -393,12 +393,18 @@ def main():
     seg_tokens = {}
     for i, t in enumerate(tokens):
         seg_tokens.setdefault(t["seg"], []).append(i)
-    # Trim TRAILING sentences whose audio never played (audio ran out before the text): otherwise they
-    # become zero-width "ghost" segments at the audio end that split_tracks would pile onto the final track.
-    last_real_seg = max((tokens[i]["seg"] for i, wt in enumerate(word_time) if isinstance(wt, tuple)),
-                        default=-1)
+    # Drop any sentence that is not FULLY aligned. The cursor aligns a contiguous PREFIX of alignable
+    # tokens (it never skips one mid-stream), so unaligned alignable tokens are always a trailing suffix
+    # -> the FIRST sentence that holds one (and everything after it) is cut. This removes BOTH whole
+    # trailing sentences the audio never reached AND a partially-narrated FINAL sentence whose leftover
+    # words would otherwise be emitted with zero-width "ghost" timestamps at the audio end (audio ran out
+    # mid-sentence, or the CTC tail-trim aligned only a prefix of it). Punctuation-only tokens (nw == "")
+    # are legitimately unaligned and don't count.
+    first_unaligned = min((tokens[i]["seg"] for i, wt in enumerate(word_time)
+                           if tokens[i]["nw"] and not isinstance(wt, tuple)), default=None)
+    last_seg = (len(sentences) - 1) if first_unaligned is None else (first_unaligned - 1)
     segments, last_end = [], 0.0
-    for si in range(last_real_seg + 1):
+    for si in range(last_seg + 1):
         idxs = seg_tokens.get(si, [])
         seed = next((word_time[i][0] for i in idxs if isinstance(word_time[i], tuple)), last_end)
         prev = seed; words_out = []
