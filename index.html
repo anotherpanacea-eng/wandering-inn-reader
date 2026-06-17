@@ -686,10 +686,12 @@
   function plKey(book){ return "inn-reader-book:"+book; }
   function savePlaylistPos(){ if(!playlist) return;
     try{ localStorage.setItem(plKey(playlist.book),
-      JSON.stringify({idx:playlist.idx, t:audio.currentTime||0, seg:posSeg(), n:playlist.tracks.length})); }catch(e){} }
+      JSON.stringify({idx:playlist.idx, t:audio.currentTime||0, seg:posSeg(), n:playlist.tracks.length, ts:Date.now()})); }catch(e){}
+    dbxSchedulePosSave(); }   // also push to the user's Dropbox if this is a Dropbox-loaded book (cross-device place)
   function loadPlaylistPos(book){ try{ return JSON.parse(localStorage.getItem(plKey(book))||"null"); }catch(e){ return null; } }
 
   function startBook(files){
+    dbxBook = null;                 // local-folder book -> not synced to Dropbox
     buildPlaylist(files).then(n=>{
       if(!n){ toast("No matching track + sync files in that selection."); return; }
       showReaderUI();
@@ -725,7 +727,7 @@
     $("#top").classList.add("on"); $("#reader").classList.add("on"); $("#bar").classList.add("on");
   }
   function open(){            // single-file (or demo / resume) entry
-    playlist=null;
+    playlist=null; dbxBook=null;
     build(); showReaderUI(); updateMetadata();
     setSeg(0); setChap(0);
     saveSession();
@@ -782,6 +784,38 @@
   }
   const dbxLink = async path => (await dbxRpc("files/get_temporary_link", { path })).link;  // streamable, CORS, ~4h
 
+  // ---- cross-device place: a tiny positions.json in the app folder, synced by Dropbox ----
+  // dbxBook = name of the currently-open Dropbox book (null otherwise). Each user's positions live in
+  // THEIR own app folder, so places are naturally per-user. Needs the files.content.write scope.
+  let dbxBook = null, dbxPosCache = {}, dbxPosTimer = null, dbxPosDirty = false;
+  const DBX_POS_PATH = "/positions.json";
+  async function dbxContent(endpoint, arg, body){            // Dropbox content endpoint (download/upload)
+    const t = await dbxToken();
+    const h = { "Authorization":"Bearer "+t, "Dropbox-API-Arg": JSON.stringify(arg) };
+    if(body !== undefined) h["Content-Type"] = "application/octet-stream";
+    return fetch("https://content.dropboxapi.com/2/"+endpoint, { method:"POST", headers:h, body });
+  }
+  async function dbxLoadPositions(){
+    try{ const r = await dbxContent("files/download", { path: DBX_POS_PATH });
+         return r.ok ? await r.json() : {}; }            // 409 = not created yet -> empty
+    catch(e){ return {}; }
+  }
+  async function dbxUploadPositions(){
+    try{ await dbxContent("files/upload", { path: DBX_POS_PATH, mode:"overwrite", mute:true },
+                          JSON.stringify(dbxPosCache)); dbxPosDirty = false; }
+    catch(e){ /* keep dirty; a later save retries */ }
+  }
+  function dbxSchedulePosSave(){                            // called from savePlaylistPos()
+    if(!dbxBook || !playlist) return;
+    dbxPosCache[dbxBook] = { idx:playlist.idx, t:audio.currentTime||0, seg:posSeg(),
+                             n:playlist.tracks.length, ts:Date.now() };
+    dbxPosDirty = true;
+    if(!dbxPosTimer) dbxPosTimer = setTimeout(()=>{ dbxPosTimer=null; if(dbxPosDirty) dbxUploadPositions(); }, 8000);
+  }
+  function dbxFlushPos(){ if(dbxBook && dbxPosDirty){ if(dbxPosTimer){ clearTimeout(dbxPosTimer); dbxPosTimer=null; } dbxUploadPositions(); } }
+  document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="hidden") dbxFlushPos(); });
+  window.addEventListener("pagehide", dbxFlushPos);
+
   const dbxPick = $("#dbxPicker");
   const dbxMsg = html => { dbxPick.style.display="flex"; dbxPick.innerHTML = html; };
   async function dbxBrowse(){
@@ -820,12 +854,14 @@
       const pl = { book: book||"Book", tracks, idx:0, globalChaps:[] };
       tracks.forEach((t,ti)=>{ if(Array.isArray(t.chapters)) t.chapters.forEach(c=>{
         if(c && typeof c.start==="number") pl.globalChaps.push({ title:c.title, trackIdx:ti, start:c.start }); }); });
-      playlist = pl; showReaderUI();
-      const saved = loadPlaylistPos(playlist.book);
+      playlist = pl; dbxBook = pl.book; showReaderUI();
+      dbxPosCache = await dbxLoadPositions();              // latest place from ANY of this user's devices
+      const dP = dbxPosCache[pl.book], lP = loadPlaylistPos(pl.book);
+      const saved = (dP && (!lP || (dP.ts||0) >= (lP.ts||0))) ? dP : lP;   // resume at the newer of Dropbox vs local
       const startIdx = (saved && saved.idx>=0 && saved.idx<tracks.length) ? saved.idx : 0;
       if(saved && typeof saved.seg==="number") pendingReadSeg = saved.seg;
       loadTrack(startIdx, saved?saved.t:0, false);
-      toast(tracks.length+" tracks · streaming from Dropbox");
+      toast(tracks.length+" tracks · streaming from Dropbox" + (dP ? " · resumed your place" : ""));
     }catch(e){ dbxMsg("<small>Couldn't open “"+name+"”: "+e.message+"</small>"); }
   }
   $("#dbxBtn").onclick = async () => {
