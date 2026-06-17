@@ -28,6 +28,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ALIGN = os.path.join(HERE, "align_book.py")
 
 
+_KEEP = re.compile(r"[^a-z']")
+def n_alignable(sentences):
+    """Count tokens align_book would actually align (letters/apostrophes), to derive a chapter's wps."""
+    return sum(1 for s in sentences for w in s.split() if _KEEP.sub("", w.lower()).strip("'"))
+
+
 def slug(t):
     return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-") or "chapter"
 
@@ -89,6 +95,10 @@ def main():
     ap.add_argument("--outdir", default="per_chapter")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--wps", type=float, default=2.5, help="passed through to align_book (narration words/sec)")
+    ap.add_argument("--auto-wps", action="store_true",
+                    help="compute EACH chapter's wps = alignable_words / audio_seconds (overrides --wps). A "
+                         "chapter narrated faster/slower than --wps drifts badly over its length; the true "
+                         "average pace is known exactly, so use it. Needs soundfile-readable audio (wav/mp3).")
     ap.add_argument("--overprovide", type=float, default=1.0, help="passed through to align_book")
     ap.add_argument("--cooldown-every", type=float, default=1800.0, help="align_book in-chapter thermal pause cadence")
     ap.add_argument("--cooldown", type=float, default=30.0, help="align_book in-chapter cooldown seconds")
@@ -153,11 +163,19 @@ def main():
         with open(txt, "w", encoding="utf-8") as f:
             f.write("\n".join(sents[s0:s1]))
         audio = [by_no[t] for t in tracks]
+        wps = a.wps
+        if a.auto_wps:
+            import soundfile as sf
+            asec = sum(sf.info(f).duration for f in audio)
+            nw = n_alignable(sents[s0:s1])
+            if asec > 0 and nw > 0:
+                wps = round(nw / asec, 3)
         print(f"\n[{i+1:02d}/{len(plan)}] ALIGN {title} ({s1-s0} sentences -> tracks "
-              f"{'+'.join('%02d' % t for t in tracks)})", flush=True)
+              f"{'+'.join('%02d' % t for t in tracks)})"
+              f"{(' | auto-wps %.3f' % wps) if a.auto_wps else ''}", flush=True)
         cmd = [sys.executable, ALIGN, "--audio", *audio, "--text", txt, "--out", out,
                "--title", title, "--device", a.device,
-               "--wps", str(a.wps), "--overprovide", str(a.overprovide),
+               "--wps", str(wps), "--overprovide", str(a.overprovide),
                "--cooldown-every", str(a.cooldown_every), "--cooldown", str(a.cooldown)]
         if a.smartctl:
             cmd += ["--smartctl", a.smartctl, "--smartctl-dev", a.smartctl_dev]
