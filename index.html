@@ -659,25 +659,34 @@
     });
   }
 
-  // a track's sync/audio can be a local File OR a URL (e.g. a Dropbox temporary link)
-  function loadSync(t){ return t.syncUrl
-    ? fetch(t.syncUrl).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
-    : parseJsonFile(t.syncFile); }
+  // A track's sync/audio can be a local File, a direct URL, or a Dropbox PATH. Dropbox temporary links
+  // expire (~4h), so we store the PATH and resolve a fresh link lazily WHEN the track loads -- resolving
+  // all of a 45h book up front would dead-link the later tracks before playback reaches them.
+  function loadSync(t){
+    if(t.syncPath) return dbxLink(t.syncPath).then(u=>fetch(u)).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
+    if(t.syncUrl)  return fetch(t.syncUrl).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
+    return parseJsonFile(t.syncFile);
+  }
+  function trackAudioSrc(t){                  // fresh src each load (Dropbox links are temporary)
+    if(t.audioPath) return dbxLink(t.audioPath);
+    if(t.audioUrl)  return Promise.resolve(t.audioUrl);
+    return Promise.resolve(curObjUrl=URL.createObjectURL(t.audioFile));
+  }
   const trackLabel = t => t.syncFile ? t.syncFile.name : (t.name || ("track "+(t.no||"")));
   let loadToken=0, curObjUrl=null;
   function loadTrack(idx, seekT, autoplay){
     if(!playlist || idx<0 || idx>=playlist.tracks.length) return;
     const token=++loadToken;                 // guard against out-of-order async loads
     playlist.idx=idx;
-    const t=playlist.tracks[idx];
+    const t=playlist.tracks[idx]; t._retried=false;   // allow one expired-link retry per load (see audio 'error')
     loadSync(t).then(d=>{
       if(token!==loadToken) return;           // a newer loadTrack superseded this one
       doc=d; isDemo=false; pendingAudioFile=t.audioFile||null;
       pendingSeek=Math.max(0, seekT||0); pendingAutoplay=!!autoplay;
       build(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
       if(curObjUrl){ URL.revokeObjectURL(curObjUrl); curObjUrl=null; }   // free the previous track's blob URL
-      audio.src = t.audioUrl || (curObjUrl=URL.createObjectURL(t.audioFile));  // URL streams; File -> blob URL
       setSeg(0); setChap(0);
+      return trackAudioSrc(t).then(src=>{ if(token===loadToken) audio.src=src; });  // -> loadedmetadata seeks/autoplays
     }).catch(()=>{ if(token===loadToken) toast("Couldn't load "+trackLabel(t)); });
   }
   function prevTrack(){ if(playlist) loadTrack(audio.currentTime<3 ? playlist.idx-1 : playlist.idx, 0, true); }
@@ -801,9 +810,10 @@
     catch(e){ return {}; }
   }
   async function dbxUploadPositions(){
-    try{ await dbxContent("files/upload", { path: DBX_POS_PATH, mode:"overwrite", mute:true },
-                          JSON.stringify(dbxPosCache)); dbxPosDirty = false; }
-    catch(e){ /* keep dirty; a later save retries */ }
+    try{ const r = await dbxContent("files/upload", { path: DBX_POS_PATH, mode:"overwrite", mute:true },
+                                    JSON.stringify(dbxPosCache));
+         if(r.ok) dbxPosDirty = false; }      // ONLY clear on 2xx; a 403 (no write scope) etc. stays dirty -> retries
+    catch(e){ /* keep dirty; a later save/flush retries */ }
   }
   function dbxSchedulePosSave(){                            // called from savePlaylistPos()
     if(!dbxBook || !playlist) return;
@@ -816,8 +826,20 @@
   document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="hidden") dbxFlushPos(); });
   window.addEventListener("pagehide", dbxFlushPos);
 
+  audio.addEventListener("error", () => {        // a Dropbox temporary link expired (e.g. paused past ~4h)
+    const t = playlist && playlist.tracks[playlist.idx];
+    if(!t || !t.audioPath || t._retried) return;          // only Dropbox-streamed tracks, once per load
+    t._retried = true;
+    const at = audio.currentTime || 0, was = !audio.paused;
+    dbxLink(t.audioPath).then(src => { audio.src = src;   // re-resolve a fresh link and resume in place
+      audio.addEventListener("loadedmetadata", function once(){ audio.removeEventListener("loadedmetadata", once);
+        try{ audio.currentTime = at; }catch(e){} if(was) audio.play().catch(()=>{}); }, { once:true });
+    }).catch(()=>{});
+  });
+
   const dbxPick = $("#dbxPicker");
-  const dbxMsg = html => { dbxPick.style.display="flex"; dbxPick.innerHTML = html; };
+  const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const dbxMsg = html => { dbxPick.style.display="flex"; dbxPick.innerHTML = html; };   // callers MUST esc() any dynamic (Dropbox-controlled) text
   async function dbxBrowse(){
     try{
       dbxMsg("<small>Loading your Dropbox books…</small>");
@@ -826,11 +848,11 @@
       dbxPick.innerHTML = "<small>Pick a book:</small>";
       folders.forEach(f => { const b=document.createElement("button"); b.className="btn";
         b.textContent="📖 "+f.name; b.onclick=()=>dbxOpenBook(f.path_lower, f.name); dbxPick.appendChild(b); });
-    }catch(e){ dbxMsg("<small>Dropbox error: "+e.message+"</small>"); }
+    }catch(e){ dbxMsg("<small>Dropbox error: "+esc(e.message)+"</small>"); }
   }
   async function dbxOpenBook(folder, name){
     try{
-      dbxMsg("<small>Opening “"+name+"” — fetching links…</small>");
+      dbxMsg("<small>Opening “"+esc(name)+"” — fetching links…</small>");
       const entries = await dbxList(folder), byName = {};
       entries.forEach(e => { if(e[".tag"]==="file") byName[e.name.toLowerCase()] = e.path_lower; });
       let tracks = [], book = name;
@@ -840,7 +862,7 @@
         for(const t of (man.tracks||[])){
           const ap = byName[(t.audio||"").toLowerCase()], sp = byName[(t.file||"").toLowerCase()];
           if(ap && sp) tracks.push({ no:t.track, name:t.audio, chapters:Array.isArray(t.chapters)?t.chapters:null,
-                                     audioUrl: await dbxLink(ap), syncUrl: await dbxLink(sp) });
+                                     audioPath: ap, syncPath: sp });   // resolved lazily per track (links expire)
         }
       } else {                                   // no manifest: pair audio + alignNN.json by number
         const A={}, S={};
@@ -848,9 +870,9 @@
           if(/\.(mp3|m4a|m4b|aac|wav|ogg|opus|flac)$/.test(n)) A[trackNo(e.name)]=e.path_lower;
           else if(/\.json$/.test(n)) S[trackNo(e.name)]=e.path_lower; });
         for(const no of Object.keys(S).filter(k=>A[k]).sort())
-          tracks.push({ no, audioUrl: await dbxLink(A[no]), syncUrl: await dbxLink(S[no]), chapters:null });
+          tracks.push({ no, audioPath: A[no], syncPath: S[no], chapters:null });
       }
-      if(!tracks.length){ dbxMsg("<small>No matching audio + sync files in “"+name+"”.</small>"); return; }
+      if(!tracks.length){ dbxMsg("<small>No matching audio + sync files in “"+esc(name)+"”.</small>"); return; }
       const pl = { book: book||"Book", tracks, idx:0, globalChaps:[] };
       tracks.forEach((t,ti)=>{ if(Array.isArray(t.chapters)) t.chapters.forEach(c=>{
         if(c && typeof c.start==="number") pl.globalChaps.push({ title:c.title, trackIdx:ti, start:c.start }); }); });
@@ -862,14 +884,14 @@
       if(saved && typeof saved.seg==="number") pendingReadSeg = saved.seg;
       loadTrack(startIdx, saved?saved.t:0, false);
       toast(tracks.length+" tracks · streaming from Dropbox" + (dP ? " · resumed your place" : ""));
-    }catch(e){ dbxMsg("<small>Couldn't open “"+name+"”: "+e.message+"</small>"); }
+    }catch(e){ dbxMsg("<small>Couldn't open “"+esc(name)+"”: "+esc(e.message)+"</small>"); }
   }
   $("#dbxBtn").onclick = async () => {
     try {
       dbxMsg("<small>Connecting to Dropbox…</small>");      // immediate feedback so a click is never silent
       if(localStorage.getItem("dbx-refresh")) await dbxBrowse();
       else await dbxAuthStart();                            // -> redirects to Dropbox (or throws, caught below)
-    } catch(e){ dbxMsg("<small>Dropbox error: "+((e && e.message) || e)+"</small>"); }
+    } catch(e){ dbxMsg("<small>Dropbox error: "+esc((e && e.message) || e)+"</small>"); }
   };
   (function(){                                  // complete the OAuth redirect on return
     const p = new URLSearchParams(location.search);
