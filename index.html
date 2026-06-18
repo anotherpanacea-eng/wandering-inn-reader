@@ -136,7 +136,9 @@
 
 <header id="top">
   <button class="tbtn" id="chaptersBtn" title="Chapters" aria-label="Chapters">☰</button>
+  <button class="tbtn" id="prevChap" title="Previous chapter" aria-label="Previous chapter">⏮</button>
   <div id="nowChap"></div>
+  <button class="tbtn" id="nextChap" title="Next chapter" aria-label="Next chapter">⏭</button>
   <button class="tbtn" id="settingsBtn" title="Display &amp; timer" aria-label="Settings">Aa</button>
 </header>
 
@@ -404,6 +406,22 @@
     target=Math.max(0,Math.min(chapters.length-1,target));
     seekTo(chapters[target].start);
   }
+  // whole-book chapter skip: crosses tracks via globalChaps (single-file falls back to jumpChapter)
+  function skipChapter(dir){
+    if(!(playlist && playlist.globalChaps && playlist.globalChaps.length)) return jumpChapter(dir);
+    const gc=playlist.globalChaps, ti=playlist.idx, t=audio.currentTime;
+    let cur=-1;                                  // current chapter = last one at/before (track, time); gc is track-ordered
+    for(let i=0;i<gc.length;i++){
+      if(gc[i].trackIdx<ti || (gc[i].trackIdx===ti && gc[i].start<=t+0.01)) cur=i; else break;
+    }
+    let target;
+    if(dir<0){ const atStart = cur>=0 && gc[cur].trackIdx===ti && (t-gc[cur].start)<3;
+      target = atStart ? cur-1 : cur; }          // double-back near a chapter's start = previous chapter
+    else target = cur+1;
+    target=Math.max(0,Math.min(gc.length-1,target));
+    const c=gc[target];
+    if(c.trackIdx===ti) seekTo(c.start); else loadTrack(c.trackIdx, c.start, true);
+  }
 
   // ---------- persistence (position) ----------
   // One canonical position per doc: {t} for listening precision, {seg} for the reading place.
@@ -518,6 +536,8 @@
   $("#play").onclick=()=>{ if(audio.paused){resumePlay();} else {audio.pause();} };
   $("#back").onclick=()=>{ audio.currentTime=Math.max(0,audio.currentTime-15); };
   $("#fwd").onclick =()=>{ audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+15); };
+  $("#prevChap").onclick=()=>skipChapter(-1);
+  $("#nextChap").onclick=()=>skipChapter(1);
   const rates=[0.8,1,1.25,1.5,2], RATE_KEY="inn-reader-rate";
   let ri=(()=>{ const v=parseInt(localStorage.getItem(RATE_KEY),10); return (v>=0&&v<rates.length)?v:1; })();
   function applyRate(){ audio.playbackRate=rates[ri]; $("#rate").textContent=rates[ri]+"×";
@@ -610,8 +630,8 @@
     const tag=(e.target.tagName||"").toLowerCase();
     if(tag==="input"||tag==="textarea") return;
     if(e.key===" "){ e.preventDefault(); $("#play").click(); }
-    else if(e.key==="ArrowLeft"){ $("#back").click(); }
-    else if(e.key==="ArrowRight"){ $("#fwd").click(); }
+    else if(e.key==="ArrowLeft"){ e.shiftKey ? skipChapter(-1) : $("#back").click(); }
+    else if(e.key==="ArrowRight"){ e.shiftKey ? skipChapter(1) : $("#fwd").click(); }
     else if(e.key==="PageDown" && pages.length>1){ e.preventDefault(); turnPage(1); }
     else if(e.key==="PageUp" && pages.length>1){ e.preventDefault(); turnPage(-1); }
     else if(e.key==="Escape" && sheetKind) closeSheet();
