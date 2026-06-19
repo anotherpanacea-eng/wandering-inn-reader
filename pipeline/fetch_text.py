@@ -35,7 +35,14 @@ Dependencies:  pip3 install requests beautifulsoup4
 """
 import argparse, json, re, sys, time
 
-UA = {"User-Agent": "Mozilla/5.0 (personal read-along fetcher)"}
+# A real browser UA + Accept headers: the live chapter pages return 403 to bot-looking User-Agents
+# (the site is up — only Volumes 1-2 are genuinely gone, returning 404). Wayback is the fallback for those.
+UA = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 # ---- sentence splitting (pragmatic, not perfect; alignment tolerates rough lines) ----
 _ABBR = {"mr", "mrs", "ms", "dr", "st", "lt", "sgt", "capt", "vs", "etc", "no", "vol"}
