@@ -39,7 +39,7 @@ def main():
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     print("device:", dev, "torch:", torch.__version__, flush=True)
     bundle = torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H
-    model = bundle.get_model().to(dev).eval()
+    model = bundle.get_model().to(dev).train(False)
     labels = bundle.get_labels()
     sr = bundle.sample_rate
 

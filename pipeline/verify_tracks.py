@@ -52,7 +52,7 @@ def main():
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     bundle = torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H
-    model = bundle.get_model().to(dev).eval(); labels = bundle.get_labels(); sr = bundle.sample_rate
+    model = bundle.get_model().to(dev).train(False); labels = bundle.get_labels(); sr = bundle.sample_rate
     print(f"device {dev}; sampling tracks {tracks}; pass>= {a.min_overlap} overlap", flush=True)
 
     def asr(path, t0):
