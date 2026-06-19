@@ -54,7 +54,7 @@ spec  →  review  →  write  →  review  →  fix  →  merge
     spans if you pass `--words-json`).
   - `align_torch.py` — **alternative** aligner on torchaudio `MMS_FA`: word-level
     timings, no aeneas/espeak install. Same output schema.
-  - **Two assembly flows for a whole audiobook Book, both ending in the same per-track
+  - **Three assembly flows for a whole audiobook Book, all ending in the same per-track
     player JSON + `manifest.json` (then `verify_tracks.py` gates the ship):**
     - **mp3 multitrack** (Book 12 — many `NN - *.mp3` tracks): `probe_track_starts.py`
       (ASR each track opening → which mp3 tracks a chapter spans → a `*_track_map.json`)
@@ -70,8 +70,18 @@ spec  →  review  →  write  →  review  →  fix  →  merge
       stream-copy playback files) → `m4b_package.py` (each per-chapter JSON is already one
       track → `alignNN.json` + manifest; no recombine/split). `m4b_common.py` resolves
       ffmpeg/ffprobe (`FFMPEG`/`FFPROBE` env or PATH; Shotcut bundles them on Windows).
+    - **straddling mp3 / single-file** (Book 17, and few-track books where tracks ≪
+      chapters so a chapter boundary falls *mid-track* — the per-chapter-anchoring
+      precondition fails): `find_chapter_boundaries.py` locates each web chapter's START
+      time in the continuous (concatenated) audio — ANCHOR (ASR each track opening →
+      fuzzy-locate it in the text → `(global_time, seg)` pairs → piecewise-linear interp)
+      then REFINE (ASR a window around each chapter's estimated start → best-overlap
+      sub-chunk), emitting monotonic boundaries (low-confidence flagged). Those boundaries
+      then cut per-chapter audio across track edges → `align_chapters.py --auto-wps` →
+      package. (A very long continuous unit drifts under one greedy pass; split it into
+      ~200-min sub-units and recombine — see the Book-17 notes.)
     - `verify_tracks.py` — ASR-vs-alignment word-overlap GATE (exits nonzero past a fail
-      fraction); `schema.py` is the shared player-JSON validator both flows write through.
+      fraction); `schema.py` is the shared player-JSON validator all flows write through.
 - **`demo/`** — offline sample: `demo-align.json` (source of truth) + `demo-data.js`
   (the embedded bundle the player's "Try the demo" loads — the audio is a base64
   `data:` URI inside it, no standalone audio file). A short Book 1 excerpt (the opening
