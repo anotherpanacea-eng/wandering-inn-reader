@@ -1,4 +1,9 @@
 #!/bin/sh
-# Enforce the IP-content limits (≤20s voice, ≤~1 page text, no bulk artifacts)
-# before every commit. Enable once per clone:   git config core.hooksPath .githooks
-exec python3 "$(git rev-parse --show-toplevel)/tools/check_ip_limits.py"
+# Block a commit that would break either hard guarantee. Enable once per clone:
+#   git config core.hooksPath .githooks
+#   1. IP-content limits (≤20s voice, ≤~1 page text, no bulk artifacts).
+#   2. Safe code patterns (no HTML-string DOM build, no parenthesised eval-mode call).
+set -e
+root="$(git rev-parse --show-toplevel)"
+python3 "$root/tools/check_ip_limits.py"
+python3 "$root/tools/check_safe_patterns.py"

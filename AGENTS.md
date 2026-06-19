@@ -93,10 +93,13 @@ trust that warning over a clean-looking output.
   `demo-data.js`, replace its `align` key with the JSON file, keep `audioDataUri`,
   re-emit `window.DEMO = …;`. (A throwaway Python script does this; the audio never
   needs regenerating.)
-- **The pre-commit security hook blocks two patterns.** In the player, build the
-  bottom-sheet / word-span DOM with the `el()` / `clear()` helpers, never by
-  assigning an HTML string to an element. In `align_torch.py`, put the model in
-  inference mode with `model.train(False)`, not the parenthesised eval-mode call.
+- **The pre-commit hook blocks two unsafe patterns** — enforced by
+  `tools/check_safe_patterns.py` (which also runs in `check.sh`), not just convention.
+  In the player, build the bottom-sheet / word-span DOM with the `el()` / `clear()`
+  helpers, never by assigning an HTML string to an element (`.innerHTML` and friends).
+  In the torch scripts (`align_torch.py`, `probe_track_starts.py`, `verify_tracks.py`),
+  put the model in inference mode with `model.train(False)`, not the parenthesised
+  eval-mode call. A reviewed exception can carry a `safe-pattern-ok` comment on the line.
 - **`.gitignore` keeps the audiobook out** — `Reading/`, `*.m4a`/`*.m4b`, and the
   locally-generated `sync*.json` / `align*.json` / `volume*.mp3` working files. The
   web text stays the author's; this is personal read-along, not redistribution.
@@ -130,16 +133,23 @@ deliberately within both limits — it uses the sample allowance, it isn't exemp
 it. If you raise a limit, change it in one place — `MAX_VOICE_SECONDS` /
 `MAX_PROSE_WORDS` — and say why in the PR.
 
-## Verify before claiming green (no CI)
+## Verify before claiming green
 
-There is no CI; verification is local:
+There is no GitHub-Actions CI (the repo token has no `workflow` scope and we keep the
+repo dependency-free), so **`./check.sh` is the gate** — it runs every check below in
+one command, no network or device needed. Run it before opening a PR. What it covers:
 
 - `python3 tools/check_ip_limits.py` — the IP-limits guard passes (also runs as the
   pre-commit hook); confirm it still *fails* on an over-limit fixture if you touch it.
-- `python3 -m py_compile pipeline/*.py` — all scripts compile.
-- A functional check of `align.py` against a synthetic aeneas sync + a chapters
-  file (assert chapters map to the right segment starts; assert an out-of-range
-  marker is dropped with a warning).
+- `python3 tools/check_safe_patterns.py` — no HTML-string DOM build, no parenthesised
+  eval-mode call (also a pre-commit hook); confirm it still *fails* if you plant one.
+- `python3 -m py_compile pipeline/*.py tools/*.py tests/*.py` — everything compiles.
+- `python3 tests/test_align.py` — the `align.py` data-contract check against a
+  synthetic aeneas sync + chapter markers (chapters map to the right segment starts;
+  an out-of-range marker is dropped with a warning; a malformed doc is rejected).
+
+Beyond `check.sh` (can't be automated here):
+
 - The **demo is the live render check**: open `index.html`, tap **Try the demo**,
   confirm the highlight tracks, the chapter menu lists chapters, and the settings
   sheet (text size / keep-awake / sleep timer) works. A browser can't be driven

@@ -858,21 +858,22 @@
   });
 
   const dbxPick = $("#dbxPicker");
-  const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  const dbxMsg = html => { dbxPick.style.display="flex"; dbxPick.innerHTML = html; };   // callers MUST esc() any dynamic (Dropbox-controlled) text
+  // dbxMsg builds the picker's status line via el()/clear() — text goes through
+  // textContent, so Dropbox-controlled names can't inject markup (no esc() needed).
+  const dbxMsg = msg => { dbxPick.style.display="flex"; clear(dbxPick); dbxPick.appendChild(el("small",{text:msg})); };
   async function dbxBrowse(){
     try{
-      dbxMsg("<small>Loading your Dropbox books…</small>");
+      dbxMsg("Loading your Dropbox books…");
       const folders = (await dbxList("")).filter(e => e[".tag"]==="folder");
-      if(!folders.length){ dbxMsg("<small>No book folders in /Apps/Inn&nbsp;Reader/. Put a book's files in a subfolder there.</small>"); return; }
-      dbxPick.innerHTML = "<small>Pick a book:</small>";
-      folders.forEach(f => { const b=document.createElement("button"); b.className="btn";
-        b.textContent="📖 "+f.name; b.onclick=()=>dbxOpenBook(f.path_lower, f.name); dbxPick.appendChild(b); });
-    }catch(e){ dbxMsg("<small>Dropbox error: "+esc(e.message)+"</small>"); }
+      if(!folders.length){ dbxMsg("No book folders in /Apps/Inn Reader/. Put a book's files in a subfolder there."); return; }
+      clear(dbxPick); dbxPick.appendChild(el("small",{text:"Pick a book:"}));
+      folders.forEach(f => dbxPick.appendChild(el("button",{class:"btn", text:"📖 "+f.name,
+        onclick:()=>dbxOpenBook(f.path_lower, f.name)})));
+    }catch(e){ dbxMsg("Dropbox error: "+e.message); }
   }
   async function dbxOpenBook(folder, name){
     try{
-      dbxMsg("<small>Opening “"+esc(name)+"” — fetching links…</small>");
+      dbxMsg("Opening “"+name+"” — fetching links…");
       const entries = await dbxList(folder), byName = {};
       entries.forEach(e => { if(e[".tag"]==="file") byName[e.name.toLowerCase()] = e.path_lower; });
       let tracks = [], book = name;
@@ -892,7 +893,7 @@
         for(const no of Object.keys(S).filter(k=>A[k]).sort())
           tracks.push({ no, audioPath: A[no], syncPath: S[no], chapters:null });
       }
-      if(!tracks.length){ dbxMsg("<small>No matching audio + sync files in “"+esc(name)+"”.</small>"); return; }
+      if(!tracks.length){ dbxMsg("No matching audio + sync files in “"+name+"”."); return; }
       const pl = { book: book||"Book", tracks, idx:0, globalChaps:[] };
       tracks.forEach((t,ti)=>{ if(Array.isArray(t.chapters)) t.chapters.forEach(c=>{
         if(c && typeof c.start==="number") pl.globalChaps.push({ title:c.title, trackIdx:ti, start:c.start }); }); });
@@ -904,14 +905,14 @@
       if(saved && typeof saved.seg==="number") pendingReadSeg = saved.seg;
       loadTrack(startIdx, saved?saved.t:0, false);
       toast(tracks.length+" tracks · streaming from Dropbox" + (dP ? " · resumed your place" : ""));
-    }catch(e){ dbxMsg("<small>Couldn't open “"+esc(name)+"”: "+esc(e.message)+"</small>"); }
+    }catch(e){ dbxMsg("Couldn't open “"+name+"”: "+e.message); }
   }
   $("#dbxBtn").onclick = async () => {
     try {
-      dbxMsg("<small>Connecting to Dropbox…</small>");      // immediate feedback so a click is never silent
+      dbxMsg("Connecting to Dropbox…");                     // immediate feedback so a click is never silent
       if(localStorage.getItem("dbx-refresh")) await dbxBrowse();
       else await dbxAuthStart();                            // -> redirects to Dropbox (or throws, caught below)
-    } catch(e){ dbxMsg("<small>Dropbox error: "+esc((e && e.message) || e)+"</small>"); }
+    } catch(e){ dbxMsg("Dropbox error: "+((e && e.message) || e)); }
   };
   (function(){                                  // complete the OAuth redirect on return
     const p = new URLSearchParams(location.search);
