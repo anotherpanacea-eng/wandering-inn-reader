@@ -204,6 +204,60 @@
   function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("on");
     clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("on"),2600); }
 
+  // ---------- schema guard (JS mirror of pipeline/schema.py:validate_doc) ----------
+  // Keep in lockstep with the Python validator — it is the single source of truth for
+  // the player/aligner contract. Returns null if the doc is loadable, else a short
+  // human-readable error. ERROR-level only: WARN-level issues (e.g. non-monotonic
+  // segment starts) degrade gracefully in the player, exactly as in schema.py.
+  function validateDoc(d, source){
+    const tag = source ? source+": " : "";
+    const num = x => typeof x==="number" && isFinite(x);   // rejects NaN/Infinity, null, strings, booleans
+    if(d===null || typeof d!=="object" || Array.isArray(d)) return tag+"top-level JSON is not an object";
+    const errs=[];
+    if(typeof d.title!=="string" || !d.title.trim()) errs.push("title missing or empty");
+    if(typeof d.audio!=="string") errs.push("audio missing (expected a filename-hint string)");
+    let segs = d.segments;
+    if(!Array.isArray(segs) || !segs.length){ errs.push("segments missing or empty"); segs=[]; }
+    for(let i=0;i<segs.length;i++){
+      const s=segs[i];
+      if(s===null || typeof s!=="object" || Array.isArray(s)){ errs.push("segment["+i+"] is not an object"); continue; }
+      const st=s.start, en=s.end;
+      if(!num(st) || st<0) errs.push("segment["+i+"].start invalid");
+      if(!num(en)) errs.push("segment["+i+"].end invalid");
+      if(num(st) && num(en) && en+1e-6<st) errs.push("segment["+i+"] end < start");
+      if(typeof s.text!=="string") errs.push("segment["+i+"].text is not a string");
+      const ws=s.words;
+      if(ws!=null && !Array.isArray(ws)) errs.push("segment["+i+"].words is not a list");
+      else if(Array.isArray(ws)){
+        for(let j=0;j<ws.length;j++){
+          const w=ws[j];
+          if(w===null || typeof w!=="object" || Array.isArray(w) || typeof w.w!=="string"){ errs.push("segment["+i+"].words["+j+"].w invalid"); continue; }
+          const ss=w.s, ee=w.e;
+          if(!num(ss) || ss<0) errs.push("segment["+i+"].words["+j+"].s invalid");
+          if(!num(ee)) errs.push("segment["+i+"].words["+j+"].e invalid");
+          if(num(ss) && num(ee) && ee+1e-6<ss) errs.push("segment["+i+"].words["+j+"] e < s");
+        }
+      }
+    }
+    const chs=d.chapters;
+    if(chs!=null){
+      if(!Array.isArray(chs)) errs.push("chapters is not a list");
+      else{
+        const nseg=segs.length;
+        for(let i=0;i<chs.length;i++){
+          const c=chs[i];
+          if(c===null || typeof c!=="object" || Array.isArray(c)){ errs.push("chapter["+i+"] is not an object"); continue; }
+          if(typeof c.title!=="string") errs.push("chapter["+i+"].title is not a string");
+          if(!num(c.start) || c.start<0) errs.push("chapter["+i+"].start invalid");
+          const sg=c.seg;
+          if(sg!=null && (!Number.isInteger(sg) || sg<0 || sg>=nseg)) errs.push("chapter["+i+"].seg "+sg+" out of range 0.."+(nseg-1));
+        }
+      }
+    }
+    if(!errs.length) return null;
+    return tag+errs.length+" problem(s):\n  • "+errs.slice(0,8).join("\n  • ")+(errs.length>8 ? "\n  • …" : "");
+  }
+
   // ---------- render ----------
   function build(){
     const r=$("#reader"); clear(r);
@@ -697,10 +751,12 @@
   function loadTrack(idx, seekT, autoplay){
     if(!playlist || idx<0 || idx>=playlist.tracks.length) return;
     const token=++loadToken;                 // guard against out-of-order async loads
-    playlist.idx=idx;
     const t=playlist.tracks[idx]; t._retried=false;   // allow one expired-link retry per load (see audio 'error')
     loadSync(t).then(d=>{
       if(token!==loadToken) return;           // a newer loadTrack superseded this one
+      const bad=validateDoc(d, trackLabel(t));
+      if(bad){ toast("Skipped "+trackLabel(t)+" — malformed sync"); console.warn("validateDoc:", bad); return; }  // leave playlist.idx on the last good track
+      playlist.idx=idx;                        // commit position only now the sync is valid — never point idx at a track that didn't load (else save / resume / "▸ N of M" desync)
       doc=d; isDemo=false; pendingAudioFile=t.audioFile||null;
       pendingSeek=Math.max(0, seekT||0); pendingAutoplay=!!autoplay;
       build(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
@@ -756,6 +812,8 @@
     $("#top").classList.add("on"); $("#reader").classList.add("on"); $("#bar").classList.add("on");
   }
   function open(){            // single-file (or demo / resume) entry
+    const bad=validateDoc(doc, isDemo?"demo data":"this read-along file");
+    if(bad){ alert("This read-along file can't be played:\n\n"+bad); return; }
     playlist=null; dbxBook=null;
     build(); showReaderUI(); updateMetadata();
     setSeg(0); setChap(0);
