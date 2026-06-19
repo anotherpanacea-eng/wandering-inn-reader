@@ -1,0 +1,23 @@
+wandering-inn-reader is licensed under the GNU General Public License v3.0 or later
+(SPDX-License-Identifier: GPL-3.0-or-later), matching setec-voiceprint and
+setec-voicewright.
+
+>>> Replace this file with the full GPL-3.0 license text before publishing. <<<
+The canonical text is available at https://www.gnu.org/licenses/gpl-3.0.txt
+(or copy it verbatim from the sibling repo: setec-voiceprint/LICENSE).
+
+Copyright (C) 2026 Joshua A. Miller, PhD
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+details.
+
+Note on dependencies (these do not change this project's license, but matter if you
+ever redistribute or sell a combined work): the optional aeneas aligner is AGPL-3.0,
+and the torchaudio MMS_FA model weights are CC-BY-NC. The player (index.html) and
+the pipeline scripts are themselves dependency-free and GPL-compatible; the
+copyleft / non-commercial flags above attach only to those external components.
