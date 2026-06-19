@@ -308,8 +308,10 @@ URIs, and fails the commit if a limit is crossed.
 
 ## Licenses
 
-All open source. The player and these scripts are dependency-free and yours, no
-framework, no tracking, everything runs locally. External tools: ffmpeg (LGPL/GPL),
+This project's own code is **GPL-3.0-or-later** (see [`LICENSE`](LICENSE)), matching
+its sibling tools setec-voiceprint and setec-voicewright — open source. The player
+and these scripts are dependency-free and yours, no framework, no tracking,
+everything runs locally. External tools: ffmpeg (LGPL/GPL),
 aeneas (AGPL-3.0), espeak (GPL), and for the optional word-level path PyTorch /
 torchaudio (BSD). Two copyleft/non-commercial flags matter only if you ever tried
 to *sell* this: aeneas is AGPL, and torchaudio's word-level `MMS_FA` model is
