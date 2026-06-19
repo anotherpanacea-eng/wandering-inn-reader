@@ -10,7 +10,9 @@ straddling two chapters) -- verify with probe_track_starts.py, which is how the 
 
 Each chapter is its own align_book.py subprocess. Belt-and-suspenders:
   * divisible + resumable -- a chapter's output JSON is written only on clean completion, so a
-    present + schema-valid file means done -> skip it (re-run a chapter by deleting its file);
+    present + schema-valid file that is NEWER than its inputs (track map, text, audio) means done ->
+    skip it. Editing the track map or text (moving a chapter's boundary) re-aligns the affected
+    chapter rather than reusing a stale-but-valid JSON; --force re-aligns all;
   * thermal-safe -- the child EXITS before the next starts (natural GPU/CPU breather), align_book's
     own --cooldown-every sheds heat inside long chapters, and we idle --between-cooldown between them;
   * fail-loud preflight (refuse a 2nd concurrent GPU job; abort if the child torch is CPU-only).
@@ -110,6 +112,9 @@ def main():
                          "its audio (otherwise a >2%% audio-coverage gap fails the run -- a missing text "
                          "slice or wrong track map shouldn't pass as 'done')")
     ap.add_argument("--dry-run", action="store_true", help="print the per-chapter plan and exit (no GPU)")
+    ap.add_argument("--force", action="store_true",
+                    help="re-align every chapter, ignoring up-to-date checks (otherwise a chapter whose "
+                         "output is newer than all its inputs -- track map, text, audio -- is skipped)")
     a = ap.parse_args()
 
     tmap = load_track_map(a.track_map)
@@ -147,14 +152,21 @@ def main():
 
     t_run0 = time.time()
     done, skipped = 0, 0
+    # An existing chapter output counts as "done" only if it is NEWER than all of its inputs: the track
+    # map + text define this chapter's boundaries/slice, the audio is the source. So editing the track map
+    # (a seg bound or track list) or the text RE-ALIGNS the affected chapter instead of silently reusing a
+    # stale-but-schema-valid JSON. --force re-aligns regardless.
+    base_mtime = max(os.path.getmtime(a.track_map), os.path.getmtime(a.text))
     for i, title, tracks, s0, s1 in plan:
         out = os.path.join(a.outdir, f"chap{i:02d}_{slug(title)}.json")
         txt = os.path.join(a.outdir, f"chap{i:02d}_{slug(title)}.txt")
-        if os.path.exists(out):                          # resume: a present + valid output == done
+        audio = [by_no[t] for t in tracks]
+        inputs_mtime = max([base_mtime] + [os.path.getmtime(f) for f in audio])
+        if not a.force and os.path.exists(out) and os.path.getmtime(out) >= inputs_mtime:
             try:
                 with open(out, encoding="utf-8") as f:
                     validate_doc(json.load(f), source=out)
-                print(f"[{i+1:02d}/{len(plan)}] SKIP {title} (valid output exists)", flush=True)
+                print(f"[{i+1:02d}/{len(plan)}] SKIP {title} (up-to-date)", flush=True)
                 skipped += 1
                 continue
             except (SchemaError, ValueError, OSError) as e:
@@ -162,7 +174,6 @@ def main():
 
         with open(txt, "w", encoding="utf-8") as f:
             f.write("\n".join(sents[s0:s1]))
-        audio = [by_no[t] for t in tracks]
         wps = a.wps
         if a.auto_wps:
             import soundfile as sf
