@@ -751,12 +751,12 @@
   function loadTrack(idx, seekT, autoplay){
     if(!playlist || idx<0 || idx>=playlist.tracks.length) return;
     const token=++loadToken;                 // guard against out-of-order async loads
-    playlist.idx=idx;
     const t=playlist.tracks[idx]; t._retried=false;   // allow one expired-link retry per load (see audio 'error')
     loadSync(t).then(d=>{
       if(token!==loadToken) return;           // a newer loadTrack superseded this one
       const bad=validateDoc(d, trackLabel(t));
-      if(bad){ toast("Skipped "+trackLabel(t)+" — malformed sync"); console.warn("validateDoc:", bad); return; }
+      if(bad){ toast("Skipped "+trackLabel(t)+" — malformed sync"); console.warn("validateDoc:", bad); return; }  // leave playlist.idx on the last good track
+      playlist.idx=idx;                        // commit position only now the sync is valid — never point idx at a track that didn't load (else save / resume / "▸ N of M" desync)
       doc=d; isDemo=false; pendingAudioFile=t.audioFile||null;
       pendingSeek=Math.max(0, seekT||0); pendingAutoplay=!!autoplay;
       build(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
