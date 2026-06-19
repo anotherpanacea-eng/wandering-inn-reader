@@ -54,6 +54,24 @@ spec  →  review  →  write  →  review  →  fix  →  merge
     spans if you pass `--words-json`).
   - `align_torch.py` — **alternative** aligner on torchaudio `MMS_FA`: word-level
     timings, no aeneas/espeak install. Same output schema.
+  - **Two assembly flows for a whole audiobook Book, both ending in the same per-track
+    player JSON + `manifest.json` (then `verify_tracks.py` gates the ship):**
+    - **mp3 multitrack** (Book 12 — many `NN - *.mp3` tracks): `probe_track_starts.py`
+      (ASR each track opening → which mp3 tracks a chapter spans → a `*_track_map.json`)
+      → `align_chapters.py --auto-wps` (per-chapter *anchored* `MMS_FA` align so drift
+      resets each chapter; drives `align_book.py`, thermal-chunked + resumable) →
+      `recombine_chapters.py` → `split_tracks.py`.
+    - **single `.m4b`** (Books 13–15 — one AAC file with embedded chapter marks):
+      `probe_m4b.py` (ASR each chapter MARK → which web chapter it starts; an edited
+      audiobook splits one long web chapter across 2–3 marks, so mark count ≠ chapter
+      count) → `m4b_make_units.py` (the hand-verified mark indices → `*_units.json` +
+      `*_track_map.json`) → `m4b_cut.py --ext wav` (per-chapter 16 kHz wavs — libsndfile
+      can't read AAC) → `align_chapters.py --auto-wps` → `m4b_cut.py --ext m4a` (lossless
+      stream-copy playback files) → `m4b_package.py` (each per-chapter JSON is already one
+      track → `alignNN.json` + manifest; no recombine/split). `m4b_common.py` resolves
+      ffmpeg/ffprobe (`FFMPEG`/`FFPROBE` env or PATH; Shotcut bundles them on Windows).
+    - `verify_tracks.py` — ASR-vs-alignment word-overlap GATE (exits nonzero past a fail
+      fraction); `schema.py` is the shared player-JSON validator both flows write through.
 - **`demo/`** — offline sample: `demo-align.json` (source of truth) + `demo-data.js`
   (the embedded bundle the player's "Try the demo" loads — the audio is a base64
   `data:` URI inside it, no standalone audio file). A short Book 1 excerpt (the opening
