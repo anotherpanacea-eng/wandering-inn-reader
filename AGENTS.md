@@ -42,6 +42,12 @@ spec  →  review  →  write  →  review  →  fix  →  merge
 - **`pipeline/`** — one-time jobs run on the operator's Mac / GPU PC:
   - `list_chapters.py` — read the live Table of Contents → a chapter-URL list for any
     Volume or audiobook Book (slices the ordered TOC, so interludes come along).
+    - **Key resource: the TOC at <https://wanderinginn.com/table-of-contents/> is the
+      authoritative audiobook→web-chapter MAPPING** (columns: Web Serial | Audiobook
+      chapter | Ebook). It tells you exactly which web chapters each audiobook Book
+      covers (e.g. Book 12 = `6.33 E … 6.47 E`, Book 13 = `6.48 T … 6.59`). **Read it
+      to get a book's range/mapping — do NOT ASR-guess it.** ASR is only ever needed
+      for AUDIO timestamp boundaries (single-file / few-track mp3 with no chapter marks).
   - `fetch_text.py` — pull chapter prose from wanderinginn.com → sentence-per-line
     `.txt` + `.chapters.json` markers.
   - `align.py` — convert an **aeneas** sync map → player JSON (sentence-level; word
