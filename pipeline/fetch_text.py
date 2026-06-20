@@ -226,14 +226,15 @@ def main():
                 print(f"  - {u}", file=sys.stderr)
             sys.exit(1)
 
-    lines, markers = [], []
+    lines, markers, failures = [], [], []
     seg = 0   # running count of non-blank sentence lines == the segment index align.py assigns
     for i, url in enumerate(urls):
         try:
             html = wayback_read(url, a.wayback_cache) if a.wayback else fetch(url)
             title, paras = extract(html, url)
         except Exception as e:
-            print(f"  ! {url}: {e}", file=sys.stderr); continue
+            print(f"  ! {url}: {e}", file=sys.stderr)
+            failures.append((url, str(e))); continue
         chapter_first_seg = seg
         sents = []
         for para in paras:
@@ -245,13 +246,29 @@ def main():
         n_sents = sum(1 for s in sents if s)
         if n_sents == 0:
             print(f"  ! {title}: no sentences extracted — skipping marker", file=sys.stderr)
-            continue
+            failures.append((url, "no sentences extracted (soft archive / error page?)")); continue
         lines += sents + [""]
         markers.append({"title": title, "url": url,
                         "seg": chapter_first_seg, "n_sentences": n_sents})
         print(f"  + {title}: {n_sents} sentences (segments {chapter_first_seg}–{seg - 1})")
         if not a.wayback:               # wayback parses from the local cache — no per-chapter sleep
             time.sleep(a.sleep)
+
+    # Don't publish partial/empty outputs as if the book were complete. In --wayback mode a cached
+    # soft-error page (>5KB but prose-less) parses to nothing; treat ANY parse failure as fatal so a
+    # bad cache can't masquerade as a finished book — exit nonzero and write neither file, so a
+    # re-run (after fixing the snapshot/timestamp) is required (Codex P1). In live mode, tolerate
+    # per-chapter skips but still refuse to write when NOTHING was extracted.
+    if a.wayback and failures:
+        print(f"\n{len(failures)} chapter(s) failed to parse from the Wayback cache — refusing to "
+              f"write partial outputs (fix the snapshot/timestamp and re-run):", file=sys.stderr)
+        for u, why in failures:
+            print(f"  - {u}: {why}", file=sys.stderr)
+        sys.exit(1)
+    if not markers:
+        print(f"\nNo chapters extracted from {len(urls)} URL(s) — refusing to write empty outputs.",
+              file=sys.stderr)
+        sys.exit(1)
 
     with open(a.out + ".txt", "w", encoding="utf-8") as f:
         f.write("\n".join(lines).strip() + "\n")
