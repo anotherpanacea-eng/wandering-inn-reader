@@ -123,10 +123,12 @@ def test_apply_skip_marks_cut_and_advances():
     assert cut_spans[0]["n_words"] == best_off and cut_spans[0]["kind"] == "cut"
 
 
-def test_rollback_restores_state():
-    """rollback_skip undoes apply_skip AND the confirm-step commits made after it (Codex #23): the next
-    step aligns words [a1, cur_pos) against the post-skip audio BEFORE the confirm runs, so rollback must
-    clear the WHOLE [a0, cur_pos) span (CUT marks + those stale timestamps), drop the entry, return a0."""
+def test_rollback_gaps_forward_no_smear():
+    """rollback_skip (Codex #23 follow-up): the confirm rejected the skip, but the confirm step already
+    committed AND irreversibly consumed the post-skip audio (AudioStream never seeks backward). Rewinding
+    the cursor to a0 would silently re-align the restored text against LATER audio (a smear). So rollback
+    clears the WHOLE [a0, cur_pos) span to None (an honest gap), drops the entry, and KEEPS the cursor
+    FORWARD (returns cur_pos) -- never a rewind, never a smear."""
     tokens, align_idx = _tokens_and_idx()
     word_time = [None] * len(tokens)
     cut_spans = []
@@ -139,11 +141,11 @@ def test_rollback_restores_state():
     for p in range(a1, cur_pos):
         word_time[align_idx[p]] = (float(p), float(p) + 0.5)                         # stale committed times
     restored = ea.rollback_skip(word_time, cut_spans, align_idx, entry, cur_pos)
-    assert restored == pos, restored
+    assert restored == cur_pos, f"cursor must stay FORWARD (no rewind/smear); got {restored} want {cur_pos}"
     assert cut_spans == [], "the cut entry must be removed"
-    # BOTH the skip span [pos, a1) AND the confirm-step commits [a1, cur_pos) must be cleared:
+    # the WHOLE [a0, cur_pos) span (CUT marks + stale confirm commits) is an honest unaligned gap:
     assert all(word_time[align_idx[p]] is None for p in range(pos, cur_pos)), \
-        "rollback must clear the skip span AND the stale confirm-step commits"
+        "rollback must clear the skip span AND the stale confirm-step commits to None (a gap)"
 
 
 def test_assemble_emits_valid_zero_duration_gap_segments():
@@ -309,7 +311,7 @@ def main():
     test_forward_match_finds_a_clear_cut()
     test_forward_match_on_cursor_does_not_fire()
     test_apply_skip_marks_cut_and_advances()
-    test_rollback_restores_state()
+    test_rollback_gaps_forward_no_smear()
     test_assemble_emits_valid_zero_duration_gap_segments()
     test_no_cut_assembles_like_the_greedy_path()
     test_starved_step_flags_under_committed()
