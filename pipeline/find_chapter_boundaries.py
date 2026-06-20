@@ -176,6 +176,7 @@ def main():
     # ---- (2) REFINE ----
     print("\n=== REFINE (per-chapter opening localization) ===", flush=True)
     results = []
+    low_conf = []                                            # chapters whose RAW refine overlap is sub-threshold
     for c in chaps:
         seg_c, title = c["seg"], c["title"]
         opening = set(words_of(" ".join(segs[seg_c:seg_c + 6]))[:40])
@@ -198,9 +199,15 @@ def main():
             t2, ov2 = search(a.refine_window * 2.2)
             if ov2 > ov:
                 t_ref, ov = t2, ov2
-        flag = "" if ov >= a.min_refine_overlap else "  <-- LOW CONFIDENCE, verify"
+        # Decide low-confidence on the RAW overlap, not the 2-dp display value: round(ov, 2) can lift
+        # a sub-threshold ov (e.g. 0.297) to 0.30 and let it pass the gate -> a false reliable=true
+        # while the per-chapter flag still says "verify" (Codex P2). Flag + gate now share raw ov.
+        is_low = ov < a.min_refine_overlap
+        flag = "  <-- LOW CONFIDENCE, verify" if is_low else ""
         results.append({"seg": seg_c, "title": title, "start": round(t_ref, 2),
                         "est": round(est, 2), "overlap": round(ov, 2)})
+        if is_low:
+            low_conf.append({"title": title, "overlap": ov})
         print(f"  [{title:34s}] est {est/60:7.1f}min -> start {t_ref/60:7.1f}min  (ov {ov:.2f}){flag}",
               flush=True)
 
@@ -213,8 +220,7 @@ def main():
     # trustworthy, Codex P1). In each case mark reliable=false, explain why, and exit nonzero so a
     # caller cannot treat a written file as a completed boundary set.
     starts = [r["start"] for r in results]
-    low_conf = [r for r in results if r["overlap"] < a.min_refine_overlap]
-    reasons = []
+    reasons = []                                             # low_conf is collected above on raw ov
     if n_trusted < min_anchors:
         reasons.append(f"only {n_trusted} trusted anchor(s) (< {min_anchors}); boundaries are "
                        f"largely proportional estimates, not measured")
@@ -222,7 +228,7 @@ def main():
         reasons.append("chapter starts are NOT monotonic -- a refine landed wrong; inspect the log")
     if low_conf:
         reasons.append(f"{len(low_conf)} chapter refinement(s) below overlap {a.min_refine_overlap:.2f} "
-                       f"(e.g. {low_conf[0]['title']!r} @ ov {low_conf[0]['overlap']:.2f}) -- those "
+                       f"(e.g. {low_conf[0]['title']!r} @ ov {low_conf[0]['overlap']:.3f}) -- those "
                        f"boundaries are unverified interpolation guesses, not located")
     reliable = not reasons
     json.dump({"total_dur": round(total_dur, 2), "tracks": [t["path"] for t in tracks],
