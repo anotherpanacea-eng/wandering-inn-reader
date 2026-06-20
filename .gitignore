@@ -13,6 +13,7 @@ pipeline/*.txt
 !pipeline/book12_track_map.json
 sync*.json
 align*.json
+*.cuts.json
 volume*.mp3
 
 # Your audiobook source + working audio (never committed — copyright + size)
