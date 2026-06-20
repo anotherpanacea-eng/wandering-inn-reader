@@ -16,7 +16,7 @@ Covers the spec's required cases plus the REVIEW P2-1 hardenings:
   * > 40%-flagged trips SYSTEMATIC;
   * a < 5-unit set falls back to the absolute band only.
 """
-import os, sys
+import math, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "pipeline"))
@@ -101,6 +101,16 @@ def test_chapter_wps_zero_on_bad_duration():
     assert abs(wps_check.chapter_wps(8000, 4000) - 2.0) < 1e-9
 
 
+def test_nonfinite_wps_cannot_bypass_hard_gate():
+    # Codex #22: a NaN/inf wps (zero/garbage duration or word-count computed upstream) must HARD-FAIL --
+    # every comparison against it is False, so it would slip through unflagged AND corrupt the median.
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        r = wps_check.screen(_book(n=8) + [{"label": "bad", "wps": bad, "minutes": 0.0, "words": 100}])
+        assert not r["ok"], f"{bad} bypassed the hard gate"
+        assert any(f["reason"] == "non-finite" for f in r["flagged"]), r["flagged"]
+        assert math.isfinite(r["median"]) and abs(r["median"] - 2.36) < 1e-9, r["median"]  # median uncorrupted
+
+
 def main():
     test_clean_book_passes()
     test_squished_slack_pair_flags_both_and_reports_pair()
@@ -110,8 +120,9 @@ def main():
     test_majority_flagged_trips_systematic()
     test_too_few_units_absolute_band_only()
     test_chapter_wps_zero_on_bad_duration()
+    test_nonfinite_wps_cannot_bypass_hard_gate()
     print("OK test_wps_check: clean / pair+report / association / 1.7-floor / systematic(band) / "
-          "systematic(majority) / too-few / unmeasured all pass")
+          "systematic(majority) / too-few / unmeasured / non-finite all pass")
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ the threshold logic is testable on pure data; the audio/word extraction is the t
 
 ASCII-only output (cp1252 console-safe): "+-" not the plus-minus sign, "->" not arrows.
 """
-import argparse, glob, json, os, statistics, sys
+import argparse, glob, json, math, os, statistics, sys
 
 from align_chapters import n_alignable, load_track_map, track_no   # reuse VERBATIM so numbers match
 from schema import validate_doc
@@ -69,9 +69,16 @@ def screen(units, tol=DEFAULT_TOL, abs_lo=DEFAULT_ABS_LO, abs_hi=DEFAULT_ABS_HI)
     flag (a noisy median can hide relative outliers but cannot move the absolute band)."""
     n = len(units)
     wps = [float(u["wps"]) for u in units]
-    too_few = n < MIN_UNITS_FOR_MEDIAN
-    median = statistics.median(wps) if n else 0.0
-    mad = statistics.median([abs(w - median) for w in wps]) if n else 0.0
+    # A non-finite wps (NaN/inf -- a zero/garbage duration or word count) must NEVER bypass a HARD gate:
+    # every comparison against NaN is False, so it would slip through UNFLAGGED *and* corrupt the median
+    # (statistics.median sorts, and NaN sorts unpredictably). Treat each as a hard failure and drop it
+    # from the median/MAD so the band stays honest. chapter_wps() already maps an unusable duration to
+    # 0.0 (an absolute outlier), but a wps computed upstream can still arrive NaN/inf -- catch it here.
+    nonfinite = {i for i, w in enumerate(wps) if not math.isfinite(w)}
+    finite = [w for i, w in enumerate(wps) if i not in nonfinite]
+    too_few = len(finite) < MIN_UNITS_FOR_MEDIAN
+    median = statistics.median(finite) if finite else 0.0
+    mad = statistics.median([abs(w - median) for w in finite]) if finite else 0.0
 
     flag_idx = {}                 # idx -> reason string (first/strongest reason wins for the label)
 
@@ -79,7 +86,12 @@ def screen(units, tol=DEFAULT_TOL, abs_lo=DEFAULT_ABS_LO, abs_hi=DEFAULT_ABS_HI)
         if i not in flag_idx:
             flag_idx[i] = reason
 
+    for i in nonfinite:
+        mark(i, "non-finite")     # NaN/inf wps == unusable audio/text for this unit; hard fail, never a pass
+
     for i, w in enumerate(wps):
+        if i in nonfinite:
+            continue
         if not too_few and median > 0 and abs(w - median) / median > tol:
             mark(i, "relative")
         if w < abs_lo or w > abs_hi:
@@ -99,11 +111,12 @@ def screen(units, tol=DEFAULT_TOL, abs_lo=DEFAULT_ABS_LO, abs_hi=DEFAULT_ABS_HI)
                         mark(j, "association")
 
     flagged = []
-    for i in sorted(flag_idx, key=lambda k: -abs(wps[k] - median)):
+    for i in sorted(flag_idx, key=lambda k: float("-inf") if not math.isfinite(wps[k])
+                    else -abs(wps[k] - median)):            # non-finite sort first (most severe)
         u = units[i]
         w = wps[i]
-        dev = ((w - median) / median) if median > 0 else 0.0
-        cause = "squished" if w >= median else "slack"     # high = text >> audio; low = audio >> text
+        dev = float("nan") if not math.isfinite(w) else (((w - median) / median) if median > 0 else 0.0)
+        cause = "squished" if (math.isfinite(w) and w >= median) else "slack"  # high=text>>audio, low=audio>>text
         flagged.append({"idx": i, "label": u["label"], "wps": w, "dev": dev,
                         "minutes": u.get("minutes"), "words": u.get("words"),
                         "cause": cause, "reason": flag_idx[i]})
