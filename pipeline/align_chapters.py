@@ -64,7 +64,14 @@ def load_track_map(path):
 
 def preflight(device):
     """Fail loud BEFORE a long run: refuse a 2nd concurrent GPU job, and abort if the child torch is
-    CPU-only (the shebang->Store-3.13 trap = ~30x slower, ~19GB RAM). Mirrors run_book_chunked.py."""
+    CPU-only (the shebang->Store-3.13 trap = ~30x slower, ~19GB RAM). Mirrors run_book_chunked.py.
+
+    The 'never two model loads' guard counts python* processes. Some setups run KNOWN-SAFE non-GPU
+    helper pythons alongside an align -- e.g. a console-less pythonw launcher (so a stray Ctrl-C from
+    another console can't kill the run) and a CPU-only temperature watchdog. Set WI_PREFLIGHT_MAX_PY
+    to the number of python* you've accounted for (default 1 = the align itself) so those don't trip
+    the guard. The torch-probe below still independently proves THIS child is the GPU job."""
+    max_py = int(os.environ.get("WI_PREFLIGHT_MAX_PY", "1"))
     try:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
@@ -73,9 +80,10 @@ def preflight(device):
         n = int(out or "0")
     except Exception:
         n = 0
-    if n > 1:
-        print(f"PREFLIGHT ABORT: {n} python processes already running -- refuse a 2nd GPU job "
-              f"(never two model loads at once). Kill strays first.", file=sys.stderr)
+    if n > max_py:
+        print(f"PREFLIGHT ABORT: {n} python processes already running (> WI_PREFLIGHT_MAX_PY="
+              f"{max_py}) -- refuse a 2nd GPU job (never two model loads at once). Kill strays first.",
+              file=sys.stderr)
         return False
     probe = subprocess.run(
         [sys.executable, "-c", "import torch,sys; sys.stdout.write(f'{torch.__version__}|{torch.cuda.is_available()}')"],
