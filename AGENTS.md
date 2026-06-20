@@ -4,13 +4,15 @@ This repo is single-author (`anotherpanacea-eng`) but multi-agent: Claude sessio
 and Codex sessions both contribute. This document is the durable, tool-agnostic
 record of how they should work here. `CLAUDE.md` is a thin pointer to this file.
 
-**Not part of the SETEC / APODICTIC fleet.** This is a standalone personal tool —
-a read-along audiobook player plus a forced-alignment pipeline. There is no
-cross-repo dependency, no vendored contract, no weekly-sync bot. Do **not** bolt
-the fleet's vendor/lock/drift-gate machinery onto it; the right move here is
-restraint (the same instinct that says "don't build a shared library for two
-consumers"). The operator's local `Cowork/repo-fleet/` hub documents the fleet,
-not this repo, and is invisible to cloud containers.
+**Standalone fleet member (#6, promoted 2026-06-20).** This is a standalone personal
+tool — a read-along audiobook player plus a forced-alignment pipeline — tracked in the
+operator's SETEC / APODICTIC fleet by **shared machines** (GPU work on Code-PC) and the
+**shared `spec→review→…→merge` Codex-gate workflow**, but it sits **OUTSIDE the SETEC
+dependency chain**: there is no cross-repo dependency, no vendored contract, no weekly-sync
+bot. Do **not** bolt the fleet's vendor/lock/drift-gate machinery onto it; the right move
+here is restraint (the same instinct that says "don't build a shared library for two
+consumers"). The operator's local `Cowork/repo-fleet/` hub documents the fleet (this repo
+is registered under "Beyond the four core repos"), and is invisible to cloud containers.
 
 ## The flow
 
@@ -54,7 +56,7 @@ spec  →  review  →  write  →  review  →  fix  →  merge
     spans if you pass `--words-json`).
   - `align_torch.py` — **alternative** aligner on torchaudio `MMS_FA`: word-level
     timings, no aeneas/espeak install. Same output schema.
-  - **Two assembly flows for a whole audiobook Book, both ending in the same per-track
+  - **Three assembly flows for a whole audiobook Book, all ending in the same per-track
     player JSON + `manifest.json` (then `verify_tracks.py` gates the ship):**
     - **mp3 multitrack** (Book 12 — many `NN - *.mp3` tracks): `probe_track_starts.py`
       (ASR each track opening → which mp3 tracks a chapter spans → a `*_track_map.json`)
@@ -70,8 +72,29 @@ spec  →  review  →  write  →  review  →  fix  →  merge
       stream-copy playback files) → `m4b_package.py` (each per-chapter JSON is already one
       track → `alignNN.json` + manifest; no recombine/split). `m4b_common.py` resolves
       ffmpeg/ffprobe (`FFMPEG`/`FFPROBE` env or PATH; Shotcut bundles them on Windows).
+    - **straddling mp3 / single-file** (Book 17, and few-track books where tracks ≪
+      chapters so a chapter boundary falls *mid-track* — the per-chapter-anchoring
+      precondition fails): `find_chapter_boundaries.py` locates each web chapter's START
+      time in the continuous (concatenated) audio — ANCHOR (ASR each track opening →
+      fuzzy-locate it in the text → keep only **trusted** `(global_time, seg)` pairs that
+      clear `--conf-min`, plus the `(0,0)`/`(end)` bookends → piecewise-linear interp;
+      dropped/low-confidence openings fall back to the proportional estimate) then REFINE
+      (ASR a window around each chapter's estimated start → best-overlap sub-chunk). The
+      output carries a `reliable` flag; too few trusted anchors (`--min-anchors`),
+      non-monotonic starts, or any chapter refinement below `--min-refine-overlap` mark
+      it `reliable=false` and exit nonzero. Those boundaries
+      then cut per-chapter audio across track edges → `align_chapters.py --auto-wps` →
+      package. (A very long continuous unit drifts under one greedy pass; split it into
+      ~200-min sub-units and recombine — see the Book-17 notes.)
     - `verify_tracks.py` — ASR-vs-alignment word-overlap GATE (exits nonzero past a fail
-      fraction); `schema.py` is the shared player-JSON validator both flows write through.
+      fraction); `schema.py` is the shared player-JSON validator all flows write through.
+      Its `--wps-pre` flag runs a NO-GPU words-per-second boundary pre-screen FIRST (the
+      shared `wps_check.py` module: each unit's `wps = n_alignable_words / audio_seconds`,
+      flagged against the book median + an absolute narration band) and exits nonzero
+      BEFORE loading the ASR model on any outlier — the wrong-boundary tell the sparse ASR
+      gate is blind to (the Book 07 incident). `--wps-only` runs just that cheap screen.
+    - `wps_check.py` — the NO-GPU wps screen, imported by both `verify_tracks.py --wps-pre`
+      and the QA workbench so the auto-wps formula lives in ONE place (matches `--auto-wps`).
 - **`demo/`** — offline sample: `demo-align.json` (source of truth) + `demo-data.js`
   (the embedded bundle the player's "Try the demo" loads — the audio is a base64
   `data:` URI inside it, no standalone audio file). A short Book 1 excerpt (the opening
@@ -165,6 +188,10 @@ one command, no network or device needed. Run it before opening a PR. What it co
 - `python3 tests/test_align.py` — the `align.py` data-contract check against a
   synthetic aeneas sync + chapter markers (chapters map to the right segment starts;
   an out-of-range marker is dropped with a warning; a malformed doc is rejected).
+- `python3 tests/test_wps_check.py` — the `wps_check.py` threshold-logic check on
+  synthetic units (clean book passes; a squished/slack PAIR flags both and names the
+  pair; a sub-threshold slack partner is caught by flag-by-association; an all-shifted
+  book trips SYSTEMATIC; a `<5`-unit set falls back to the absolute band only).
 
 Beyond `check.sh` (can't be automated here):
 

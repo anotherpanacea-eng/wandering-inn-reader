@@ -28,5 +28,7 @@ python3 tests/test_align.py
 
 echo "→ edit-aware aligner cut-detection / gap-emit test (synthetic, no GPU)"
 python3 tests/test_editaware.py
+echo "→ wps-gate threshold-logic test"
+python3 tests/test_wps_check.py
 
 echo "✓ all local checks passed"

@@ -18,6 +18,7 @@ except Exception:
 
 from schema import validate_doc
 from asr_overlap import norm, words_of, overlap_score   # shared with align_book_editaware's resync
+import wps_check
 
 def track_no(s):
     m = re.search(r"(\d+)", os.path.basename(s))
@@ -26,8 +27,8 @@ def track_no(s):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dir", required=True, help="per-track output dir (alignNN.json)")
-    ap.add_argument("--audio-glob", required=True, help="glob for the audiobook tracks (numbered NN - ...)")
+    ap.add_argument("--dir", help="per-track output dir (alignNN.json); required for the ASR pass")
+    ap.add_argument("--audio-glob", help="glob for the audiobook tracks (numbered NN - ...); required for the ASR pass")
     ap.add_argument("--tracks", nargs="*", help="track numbers to sample (default: a spread across the book)")
     ap.add_argument("--points", type=int, default=5, help="probe points per track")
     ap.add_argument("--win", type=float, default=8.0, help="seconds of audio transcribed per point")
@@ -35,7 +36,32 @@ def main():
                     help="a point PASSES if >= this fraction of the aligned-window words appear in the ASR")
     ap.add_argument("--max-fail-frac", type=float, default=0.4,
                     help="exit nonzero if more than this fraction of sampled points FAIL")
+    ap.add_argument("--wps-pre", action="store_true",
+                    help="run the NO-GPU wps boundary pre-screen FIRST (before loading the ASR model); on any "
+                         "outlier exit nonzero BEFORE the GPU pass -- fail fast, fail cheap, never burn GPU on a "
+                         "book with a known-bad boundary. Both gates must pass to ship.")
+    ap.add_argument("--wps-only", action="store_true",
+                    help="run ONLY the wps pre-screen and exit (no ASR/GPU) -- the cheap CI/pre-flight smoke test")
+    wps_check.add_args(ap)         # --track-map/--text (Mode 1), --dir/--manifest/--units (Mode 2), --wps-tol/-abs, --allow-wps-outliers
     a = ap.parse_args()
+
+    # --- wps pre-screen: a NO-GPU CPU pass that runs BEFORE any torch import / model load. A wps outlier
+    # is the wrong-boundary signature the sparse ASR gate is structurally blind to, so in the SHIP gate it
+    # is HARD: exit nonzero here and SKIP the GPU pass entirely, unless --allow-wps-outliers waives it.
+    if a.wps_pre or a.wps_only:
+        passed, _ = wps_check.run(a)
+        if not passed and not a.allow_wps_outliers:
+            sys.exit("WPS GATE FAIL: wps pre-screen flagged a likely misplaced boundary -- ASR pass SKIPPED, no "
+                     "GPU spent. Fix the track map, or pass --allow-wps-outliers to force the ASR pass.")
+        if not passed and a.allow_wps_outliers:
+            print("=== --allow-wps-outliers: wps flags DEMOTED to warning; proceeding to ASR pass. ===", flush=True)
+        if a.wps_only:
+            return                  # cheap smoke test: no ASR at all
+        print("=== wps pre-screen clear; proceeding to ASR pass. ===", flush=True)
+
+    if not a.dir or not a.audio_glob:
+        sys.exit("the ASR pass needs --dir and --audio-glob (the wps pre-screen alone can use --track-map/--text "
+                 "or --dir + --manifest/--units). Pass --wps-only to run just the cheap screen.")
 
     import numpy as np, soundfile as sf, torch, torchaudio
 

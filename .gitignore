@@ -16,6 +16,11 @@ align*.json
 *.cuts.json
 volume*.mp3
 
+# Wayback raw-HTML snapshot cache (fetch_text.py --wayback): cached author prose,
+# never tracked — keep the whole cache dir out regardless of where it's pointed.
+_wb_cache/
+*_wb_cache/
+
 # Your audiobook source + working audio (never committed — copyright + size)
 Reading/
 *.m4a
