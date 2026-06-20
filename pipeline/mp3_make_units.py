@@ -19,7 +19,7 @@ aligned segment times, so a merged unit can still carry >1 chapter marker). Pass
 web chapters 0 and 1; repeat or comma-separate for several groups, e.g. --merge "0-1,5-7". Ranges must be
 ascending, in range, and non-overlapping; fail-loud otherwise.
 """
-import argparse, json, sys
+import argparse, json, math, sys
 
 
 def parse_merges(specs, n):
@@ -93,13 +93,16 @@ def main():
     # non-negative, strictly ascending, and end before total_dur, with non-decreasing seg order
     # (time forward => text forward). Without this a non-monotonic boundaries file (e.g. starts
     # [10, 5] with total_dur 20) silently writes negative-duration units at exit 0 (Codex P1).
-    if not isinstance(total, (int, float)) or total <= 0:
-        sys.exit(f"{a.boundaries} total_dur is not a positive number: {total!r}")
+    # bool is an int subclass and NaN/inf are floats, so both slip past a bare isinstance check;
+    # require a finite, non-bool number for total_dur and every start (Codex P2).
+    if not isinstance(total, (int, float)) or isinstance(total, bool) or not math.isfinite(total) \
+            or total <= 0:
+        sys.exit(f"{a.boundaries} total_dur is not a positive finite number: {total!r}")
     errs, prev_s, prev_seg = [], None, None
     for i, c in enumerate(ch):
         s, seg, title = c.get("start"), c.get("seg"), c.get("title")
-        if not isinstance(s, (int, float)):
-            errs.append(f"chapter {i} ({title!r}) start is not numeric: {s!r}"); continue
+        if not isinstance(s, (int, float)) or isinstance(s, bool) or not math.isfinite(s):
+            errs.append(f"chapter {i} ({title!r}) start is not a finite number: {s!r}"); continue
         if s < 0:
             errs.append(f"chapter {i} ({title!r}) start {s} is negative")
         if s >= total:
