@@ -124,18 +124,26 @@ def test_apply_skip_marks_cut_and_advances():
 
 
 def test_rollback_restores_state():
-    """rollback_skip undoes the most recent apply_skip: marks become None again and the entry is dropped."""
+    """rollback_skip undoes apply_skip AND the confirm-step commits made after it (Codex #23): the next
+    step aligns words [a1, cur_pos) against the post-skip audio BEFORE the confirm runs, so rollback must
+    clear the WHOLE [a0, cur_pos) span (CUT marks + those stale timestamps), drop the entry, return a0."""
     tokens, align_idx = _tokens_and_idx()
     word_time = [None] * len(tokens)
     cut_spans = []
     pos = _seg_start_pos(tokens, align_idx, CUT_FROM_SEG)
     to_start = _seg_start_pos(tokens, align_idx, CUT_TO_SEG)
-    new_pos = ea.apply_skip(word_time, cut_spans, align_idx, pos, to_start - pos, 12.3)
+    a1 = ea.apply_skip(word_time, cut_spans, align_idx, pos, to_start - pos, 12.3)   # cursor -> a1
     entry = cut_spans[-1]
-    restored = ea.rollback_skip(word_time, cut_spans, align_idx, entry)
+    # the confirm step commits a few words AFTER a1 against the (wrong) post-skip audio, advancing cursor:
+    cur_pos = min(a1 + 3, len(align_idx))
+    for p in range(a1, cur_pos):
+        word_time[align_idx[p]] = (float(p), float(p) + 0.5)                         # stale committed times
+    restored = ea.rollback_skip(word_time, cut_spans, align_idx, entry, cur_pos)
     assert restored == pos, restored
     assert cut_spans == [], "the cut entry must be removed"
-    assert all(word_time[align_idx[p]] is None for p in range(pos, new_pos)), "CUT marks must clear"
+    # BOTH the skip span [pos, a1) AND the confirm-step commits [a1, cur_pos) must be cleared:
+    assert all(word_time[align_idx[p]] is None for p in range(pos, cur_pos)), \
+        "rollback must clear the skip span AND the stale confirm-step commits"
 
 
 def test_assemble_emits_valid_zero_duration_gap_segments():

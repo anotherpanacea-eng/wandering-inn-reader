@@ -123,12 +123,16 @@ def apply_skip(word_time, cut_spans, align_idx, pos_in_align, best_off, audio_mi
     return a1
 
 
-def rollback_skip(word_time, cut_spans, align_idx, entry):
-    """Undo the most recent apply_skip (the post-skip confirm-ASR said the skip was WRONG): clear the
-    'CUT' marks back to None ("not reached") and drop the cut_spans entry. Returns the restored
-    pos_in_align (entry['a0']). `entry` is the dict apply_skip appended (and must be its last). Pure."""
-    a0, a1 = entry["a0"], entry["a1"]
-    for p in range(a0, a1):
+def rollback_skip(word_time, cut_spans, align_idx, entry, cur_pos):
+    """Undo the most recent apply_skip AND every word committed after it (the post-skip confirm-ASR said
+    the skip was WRONG). apply_skip jumps the cursor to a1, so the NEXT step aligns words [a1, cur_pos)
+    against the POST-skip audio BEFORE the confirm runs; if the confirm rejects the skip those timestamps
+    are pinned to the wrong audio. Clear the WHOLE [a0, cur_pos) span back to None -- the 'CUT' marks of
+    the skip AND those confirm-step commits (the previous version cleared only [a0, a1), leaving the stale
+    [a1, cur_pos) timestamps in the output) -- drop the cut_spans entry, and return the restored
+    pos_in_align (entry['a0']). `entry` must be the cut_spans tail. Pure."""
+    a0 = entry["a0"]
+    for p in range(a0, max(entry["a1"], cur_pos)):
         word_time[align_idx[p]] = None
     if cut_spans and cut_spans[-1] is entry:
         cut_spans.pop()
@@ -433,7 +437,9 @@ def main():
                 # treat the window conservatively (a bad skip self-heals in one step). Handled here in full
                 # so it doesn't also fall through and double-count as a fresh dead-zone.
                 score_here = detail[0]
-                pos_in_align = rollback_skip(word_time, cut_spans, align_idx, last_skip_entry)
+                # pass the CURRENT cursor: the confirm step already committed [a1, pos_in_align) against
+                # the post-skip audio, and those must be cleared too (not just the [a0, a1) skip span).
+                pos_in_align = rollback_skip(word_time, cut_spans, align_idx, last_skip_entry, pos_in_align)
                 last_skip_entry = None
                 print(f"  ROLLBACK @ {wstart/60:.1f}min: post-skip confirm here-overlap "
                       f"{score_here:.2f} (no forward match) — undid the last skip, treating as dead-zone",
