@@ -49,6 +49,9 @@ def main():
     ap.add_argument("--min-anchors", type=int, default=None,
                     help="min trusted interior anchors for a usable run (default: max(2, half the "
                          "tracks)); below it the output is marked reliable=false and exit is nonzero")
+    ap.add_argument("--min-refine-overlap", type=float, default=0.30,
+                    help="min REFINE overlap for a chapter boundary to count as confidently located; "
+                         "any chapter below this marks the run reliable=false (and exits nonzero)")
     a = ap.parse_args()
 
     SR = 16000
@@ -191,29 +194,36 @@ def main():
             return best_t, best_ov
 
         t_ref, ov = search(a.refine_window)
-        if ov < 0.3:                                          # widen once on low confidence
+        if ov < a.min_refine_overlap:                         # widen once on low confidence
             t2, ov2 = search(a.refine_window * 2.2)
             if ov2 > ov:
                 t_ref, ov = t2, ov2
-        flag = "" if ov >= 0.3 else "  <-- LOW CONFIDENCE, verify"
+        flag = "" if ov >= a.min_refine_overlap else "  <-- LOW CONFIDENCE, verify"
         results.append({"seg": seg_c, "title": title, "start": round(t_ref, 2),
                         "est": round(est, 2), "overlap": round(ov, 2)})
         print(f"  [{title:34s}] est {est/60:7.1f}min -> start {t_ref/60:7.1f}min  (ov {ov:.2f}){flag}",
               flush=True)
 
     # ---- reliability gate ----
-    # The boundaries are only as trustworthy as the anchors interpolated through. Two failure modes
-    # make the output UNUSABLE rather than merely imperfect: too few trusted anchors (the run is
-    # mostly proportional guessing), or non-monotonic chapter starts (a refine landed wrong). In
-    # either case mark reliable=false, explain why, and exit nonzero so a caller cannot treat a
-    # written file as a completed boundary set (Codex P1).
+    # The boundaries are only as trustworthy as the anchors interpolated through AND the per-chapter
+    # refinements. Three failure modes make the output UNUSABLE rather than merely imperfect: too few
+    # trusted anchors (the run is mostly proportional guessing); non-monotonic chapter starts (a
+    # refine landed wrong); or any chapter whose REFINE overlap is below --min-refine-overlap (an
+    # unverified interpolation guess wearing a real timestamp -- monotonic starts do NOT make it
+    # trustworthy, Codex P1). In each case mark reliable=false, explain why, and exit nonzero so a
+    # caller cannot treat a written file as a completed boundary set.
     starts = [r["start"] for r in results]
+    low_conf = [r for r in results if r["overlap"] < a.min_refine_overlap]
     reasons = []
     if n_trusted < min_anchors:
         reasons.append(f"only {n_trusted} trusted anchor(s) (< {min_anchors}); boundaries are "
                        f"largely proportional estimates, not measured")
     if starts != sorted(starts):
         reasons.append("chapter starts are NOT monotonic -- a refine landed wrong; inspect the log")
+    if low_conf:
+        reasons.append(f"{len(low_conf)} chapter refinement(s) below overlap {a.min_refine_overlap:.2f} "
+                       f"(e.g. {low_conf[0]['title']!r} @ ov {low_conf[0]['overlap']:.2f}) -- those "
+                       f"boundaries are unverified interpolation guesses, not located")
     reliable = not reasons
     json.dump({"total_dur": round(total_dur, 2), "tracks": [t["path"] for t in tracks],
                "reliable": reliable, "unreliable_reasons": reasons, "trusted_anchors": n_trusted,
