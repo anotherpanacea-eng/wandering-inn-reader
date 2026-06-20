@@ -26,4 +26,7 @@ python3 -m py_compile pipeline/*.py tools/*.py tests/*.py
 echo "→ align.py data-contract test"
 python3 tests/test_align.py
 
+echo "→ wps-gate threshold-logic test"
+python3 tests/test_wps_check.py
+
 echo "✓ all local checks passed"

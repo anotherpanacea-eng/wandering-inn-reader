@@ -72,6 +72,13 @@ spec  →  review  →  write  →  review  →  fix  →  merge
       ffmpeg/ffprobe (`FFMPEG`/`FFPROBE` env or PATH; Shotcut bundles them on Windows).
     - `verify_tracks.py` — ASR-vs-alignment word-overlap GATE (exits nonzero past a fail
       fraction); `schema.py` is the shared player-JSON validator both flows write through.
+      Its `--wps-pre` flag runs a NO-GPU words-per-second boundary pre-screen FIRST (the
+      shared `wps_check.py` module: each unit's `wps = n_alignable_words / audio_seconds`,
+      flagged against the book median + an absolute narration band) and exits nonzero
+      BEFORE loading the ASR model on any outlier — the wrong-boundary tell the sparse ASR
+      gate is blind to (the Book 07 incident). `--wps-only` runs just that cheap screen.
+    - `wps_check.py` — the NO-GPU wps screen, imported by both `verify_tracks.py --wps-pre`
+      and the QA workbench so the auto-wps formula lives in ONE place (matches `--auto-wps`).
 - **`demo/`** — offline sample: `demo-align.json` (source of truth) + `demo-data.js`
   (the embedded bundle the player's "Try the demo" loads — the audio is a base64
   `data:` URI inside it, no standalone audio file). A short Book 1 excerpt (the opening
@@ -165,6 +172,10 @@ one command, no network or device needed. Run it before opening a PR. What it co
 - `python3 tests/test_align.py` — the `align.py` data-contract check against a
   synthetic aeneas sync + chapter markers (chapters map to the right segment starts;
   an out-of-range marker is dropped with a warning; a malformed doc is rejected).
+- `python3 tests/test_wps_check.py` — the `wps_check.py` threshold-logic check on
+  synthetic units (clean book passes; a squished/slack PAIR flags both and names the
+  pair; a sub-threshold slack partner is caught by flag-by-association; an all-shifted
+  book trips SYSTEMATIC; a `<5`-unit set falls back to the absolute band only).
 
 Beyond `check.sh` (can't be automated here):
 
