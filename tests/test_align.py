@@ -10,6 +10,12 @@ no pytest); run directly: `python3 tests/test_align.py`. Exit 0 = pass.
 """
 import contextlib, io, os, sys
 
+try:                                  # cp1252 Windows console can't encode the check glyph
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "pipeline"))
 
