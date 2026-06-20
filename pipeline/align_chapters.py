@@ -28,6 +28,7 @@ from schema import validate_doc, SchemaError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ALIGN = os.path.join(HERE, "align_book.py")
+ALIGN_EDITAWARE = os.path.join(HERE, "align_book_editaware.py")
 
 
 _KEEP = re.compile(r"[^a-z']")
@@ -119,6 +120,19 @@ def main():
                     help="pass through to align_book: accept a chapter whose text legitimately ends before "
                          "its audio (otherwise a >2%% audio-coverage gap fails the run -- a missing text "
                          "slice or wrong track map shouldn't pass as 'done')")
+    ap.add_argument("--edit-aware", action="store_true",
+                    help="drive align_book_editaware.py (gap-skipping aligner) instead of align_book.py, for "
+                         "chapters the audiobook EDITED (within-chapter audio cuts). Recommended ONLY on the "
+                         "handful of chapters verify_tracks flags, not the whole book (adds periodic ASR "
+                         "cost). Writes a <out>.cuts.json sidecar per chapter.")
+    ap.add_argument("--resync-every", type=float, default=90.0, help="[--edit-aware] ASR resync cadence (audio sec)")
+    ap.add_argument("--asr-win", type=float, default=8.0, help="[--edit-aware] seconds ASR'd per resync check")
+    ap.add_argument("--resync-min", type=float, default=0.5, help="[--edit-aware] here-overlap below which to search forward")
+    ap.add_argument("--match-min", type=float, default=0.6, help="[--edit-aware] forward-match overlap to ACCEPT a cut")
+    ap.add_argument("--forward-words", type=int, default=1500, help="[--edit-aware] forward text searched for the jump target")
+    ap.add_argument("--min-skip-words", type=int, default=40, help="[--edit-aware] ignore matches nearer than this (jitter)")
+    ap.add_argument("--commit-floor-frac", type=float, default=0.5, help="[--edit-aware] starved-step suspicion trigger")
+    ap.add_argument("--max-deadzones", type=int, default=6, help="[--edit-aware] consecutive dead-zones -> fail loud")
     ap.add_argument("--dry-run", action="store_true", help="print the per-chapter plan and exit (no GPU)")
     ap.add_argument("--force", action="store_true",
                     help="re-align every chapter, ignoring up-to-date checks (otherwise a chapter whose "
@@ -192,7 +206,8 @@ def main():
         print(f"\n[{i+1:02d}/{len(plan)}] ALIGN {title} ({s1-s0} sentences -> tracks "
               f"{'+'.join('%02d' % t for t in tracks)})"
               f"{(' | auto-wps %.3f' % wps) if a.auto_wps else ''}", flush=True)
-        cmd = [sys.executable, ALIGN, "--audio", *audio, "--text", txt, "--out", out,
+        child = ALIGN_EDITAWARE if a.edit_aware else ALIGN
+        cmd = [sys.executable, child, "--audio", *audio, "--text", txt, "--out", out,
                "--title", title, "--device", a.device,
                "--wps", str(wps), "--overprovide", str(a.overprovide),
                "--cooldown-every", str(a.cooldown_every), "--cooldown", str(a.cooldown)]
@@ -200,6 +215,11 @@ def main():
             cmd += ["--smartctl", a.smartctl, "--smartctl-dev", a.smartctl_dev]
         if a.allow_undercover:
             cmd += ["--allow-undercover"]
+        if a.edit_aware:                              # forward the gap-skipping detector's knobs
+            cmd += ["--resync-every", str(a.resync_every), "--asr-win", str(a.asr_win),
+                    "--resync-min", str(a.resync_min), "--match-min", str(a.match_min),
+                    "--forward-words", str(a.forward_words), "--min-skip-words", str(a.min_skip_words),
+                    "--commit-floor-frac", str(a.commit_floor_frac), "--max-deadzones", str(a.max_deadzones)]
         t0 = time.time()
         rc = subprocess.run(cmd).returncode
         dt = (time.time() - t0) / 60

@@ -125,7 +125,84 @@ def emission_for(model, device, samples, sub_sec, sr, torch):
         return None
     return torch.cat(pieces, dim=1)                  # (1, F, V) on CPU
 
-def save_ckpt(path, pos_in_align, audio_pos, word_time):
+def fit_and_align(aligner, tokenizer, emission, words, step):
+    """The CTC tail-trim loop, extracted from main() (was align_book.py's inline lines ~322-342)
+    so align_book_editaware.py can reuse it verbatim instead of forking it.
+
+    CTC needs emission_frames >= target_tokens + repeats. At the END of the audio the buffer can't
+    refill to a full WINDOW, so the emission is SHORT while `words` is a fixed count -> the queued text
+    can tokenize to more tokens than the short tail can hold ("targets length is too long for CTC").
+    Trim the queued words to what fits; the trimmed-off tail stays queued (the caller re-queues it).
+
+    Returns (spans, nfit): `spans` is the aligner output for words[:nfit], or None if not even one
+    word fits this emission (caller then breaks). Behaviour is byte-identical to the old inline loop;
+    `sys.exit` on any non-CTC aligner error is preserved (don't let a raw traceback escape)."""
+    spans, nfit = None, len(words)
+    while nfit > 0:
+        try:
+            spans = aligner(emission[0], tokenizer(words[:nfit]))   # CPU
+            break
+        except Exception as e:                       # keep the FRAMED fail-loud message for any non-CTC
+            msg = str(e)                             # aligner error (don't let a raw traceback escape)
+            if "too long for CTC" not in msg:
+                sys.exit(f"aligner failed at step {step}: {e}")
+            if nfit <= 1:                            # even ONE word won't fit this tiny tail emission ->
+                nfit = 0; break                      # give up this window (words stay queued; outer break)
+            m = re.search(r"log_probs length:\s*(\d+).+?targets length:\s*(\d+).+?repeats:\s*(\d+)", msg)
+            if m:
+                F, T, R = (int(x) for x in m.groups())
+                tpw = max(1.0, T / nfit)             # avg CTC tokens per queued word
+                drop = max(1, int((T + R - F) / tpw) + 2)
+            else:
+                drop = max(1, nfit - int(nfit * 0.85))
+            nfit = max(1, nfit - drop)               # nfit was >= 2, drop >= 1 -> STRICTLY decreases (no hang)
+    return spans, nfit
+
+
+def assemble_segments(tokens, sentences, word_time):
+    """Group aligned tokens back into sentence segments (extracted from main()'s lines ~392-423,
+    unchanged for the plain aligner, made CUT-AWARE for align_book_editaware.py).
+
+    Drop any sentence that is not FULLY aligned. align_book's cursor aligns a contiguous PREFIX of
+    alignable tokens, so unaligned alignable tokens are always a trailing suffix -> the FIRST sentence
+    that holds one (and everything after it) is cut. This removes BOTH whole trailing sentences the
+    audio never reached AND a partially-narrated FINAL sentence whose leftover words would otherwise be
+    emitted with zero-width "ghost" timestamps. Punctuation-only tokens (nw == "") are legitimately
+    unaligned and don't count.
+
+    CUT-AWARENESS (the edit-aware addition; a no-op for the greedy aligner, which never writes 'CUT'):
+    a token whose word_time is the sentinel string 'CUT' is INTENTIONALLY skipped (the audiobook
+    omitted it), NOT "not yet reached". So it must NOT set first_unaligned (it is resolved), and in the
+    word stream it collapses to a zero-width span at the running clock — exactly like a punctuation
+    token. A sentence that is ENTIRELY 'CUT' therefore becomes a schema-valid zero-duration GAP segment:
+    its words still render (the reader sees the skipped prose) but it never highlights during playback."""
+    seg_tokens = {}
+    for i, t in enumerate(tokens):
+        seg_tokens.setdefault(t["seg"], []).append(i)
+    first_unaligned = min((tokens[i]["seg"] for i, wt in enumerate(word_time)
+                           if tokens[i]["nw"] and not isinstance(wt, tuple) and wt != "CUT"), default=None)
+    last_seg = (len(sentences) - 1) if first_unaligned is None else (first_unaligned - 1)
+    segments, last_end = [], 0.0
+    for si in range(last_seg + 1):
+        idxs = seg_tokens.get(si, [])
+        seed = next((word_time[i][0] for i in idxs if isinstance(word_time[i], tuple)), last_end)
+        prev = seed; words_out = []
+        for i in idxs:
+            wt = word_time[i]
+            if isinstance(wt, tuple):
+                s, e = wt; prev = e
+            else:
+                s = e = prev                          # unaligned/punctuation/'CUT': zero-width at prev
+            words_out.append({"w": tokens[i]["w"], "s": round(s, 3), "e": round(e, 3)})
+        start = words_out[0]["s"] if words_out else last_end
+        end = max((w["e"] for w in words_out), default=last_end)
+        last_end = max(last_end, end)
+        segments.append({"id": si, "start": round(start, 3), "end": round(end, 3),
+                         "text": sentences[si], "words": words_out})
+    return segments
+
+
+def save_ckpt(path, pos_in_align, audio_pos, word_time, cut_spans=None, since_resync_sec=0.0):
     """Crash-DURABLE resume state. The old version did open->dump->os.replace with NO fsync; on this
     box a hard THERMAL reboot mid-write left a full-size but ALL-ZERO file (data sat in the page
     cache, never flushed) so --resume was impossible. Fix: fsync the temp file's DATA to the SSD
@@ -136,7 +213,12 @@ def save_ckpt(path, pos_in_align, audio_pos, word_time):
         return
     tmp = path + ".tmp"
     with open(tmp, "wb") as f:
-        pickle.dump({"pos": pos_in_align, "audio_pos": audio_pos, "word_time": word_time},
+        # cut_spans / since_resync_sec are the edit-aware aligner's extra state; the greedy aligner
+        # passes the defaults (empty / 0.0). load_ckpt is backward-tolerant either way (a checkpoint
+        # written by either script loads in either, missing keys defaulting), and the two scripts write
+        # to different --checkpoint paths in practice.
+        pickle.dump({"pos": pos_in_align, "audio_pos": audio_pos, "word_time": word_time,
+                     "cut_spans": cut_spans or [], "since_resync_sec": since_resync_sec},
                     f, protocol=pickle.HIGHEST_PROTOCOL)
         f.flush()
         os.fsync(f.fileno())                  # force DATA to disk before we rename over the target
@@ -314,30 +396,10 @@ def main():
         emission = emission_for(model, dev, samples, a.sub, sr, torch)
         if emission is None or emission.size(1) == 0:    # degenerate tail -> no usable frames, stop
             break
-        # CTC needs emission_frames >= target_tokens + repeats. At the END of the audio the buffer can't
-        # refill to a full WINDOW, so the emission is SHORT while `grab` words is fixed -> the queued text
-        # can tokenize to more tokens than the short tail can hold ("targets length is too long for CTC").
-        # Trim the queued words to what fits; the trimmed-off tail stays queued (if the audio is truly
-        # ending it's the expected leftover the coverage check reports, not a crash).
-        spans, nfit = None, len(words)
-        while nfit > 0:
-            try:
-                spans = aligner(emission[0], tokenizer(words[:nfit]))   # CPU
-                break
-            except Exception as e:                       # keep the FRAMED fail-loud message for any non-CTC
-                msg = str(e)                             # aligner error (don't let a raw traceback escape)
-                if "too long for CTC" not in msg:
-                    sys.exit(f"aligner failed at step {step}: {e}")
-                if nfit <= 1:                            # even ONE word won't fit this tiny tail emission ->
-                    nfit = 0; break                      # give up this window (words stay queued; outer break)
-                m = re.search(r"log_probs length:\s*(\d+).+?targets length:\s*(\d+).+?repeats:\s*(\d+)", msg)
-                if m:
-                    F, T, R = (int(x) for x in m.groups())
-                    tpw = max(1.0, T / nfit)             # avg CTC tokens per queued word
-                    drop = max(1, int((T + R - F) / tpw) + 2)
-                else:
-                    drop = max(1, nfit - int(nfit * 0.85))
-                nfit = max(1, nfit - drop)               # nfit was >= 2, drop >= 1 -> STRICTLY decreases (no hang)
+        # CTC tail-trim (extracted to fit_and_align so the edit-aware aligner reuses it verbatim): trim
+        # the queued words to what this (possibly short, end-of-audio) emission can hold; the rest stays
+        # queued. spans is None only when not even one word fits -> no usable audio here, stop.
+        spans, nfit = fit_and_align(aligner, tokenizer, emission, words, step)
         if spans is None:                                # couldn't fit even one word -> no usable audio here
             break
         if nfit < len(a_take):                           # short tail held only a prefix; re-queue the rest
@@ -390,36 +452,10 @@ def main():
         if is_final: break
 
     # ---- assemble segments (group tokens by sentence; fill punctuation-only from neighbours) ----
-    seg_tokens = {}
-    for i, t in enumerate(tokens):
-        seg_tokens.setdefault(t["seg"], []).append(i)
-    # Drop any sentence that is not FULLY aligned. The cursor aligns a contiguous PREFIX of alignable
-    # tokens (it never skips one mid-stream), so unaligned alignable tokens are always a trailing suffix
-    # -> the FIRST sentence that holds one (and everything after it) is cut. This removes BOTH whole
-    # trailing sentences the audio never reached AND a partially-narrated FINAL sentence whose leftover
-    # words would otherwise be emitted with zero-width "ghost" timestamps at the audio end (audio ran out
-    # mid-sentence, or the CTC tail-trim aligned only a prefix of it). Punctuation-only tokens (nw == "")
-    # are legitimately unaligned and don't count.
-    first_unaligned = min((tokens[i]["seg"] for i, wt in enumerate(word_time)
-                           if tokens[i]["nw"] and not isinstance(wt, tuple)), default=None)
-    last_seg = (len(sentences) - 1) if first_unaligned is None else (first_unaligned - 1)
-    segments, last_end = [], 0.0
-    for si in range(last_seg + 1):
-        idxs = seg_tokens.get(si, [])
-        seed = next((word_time[i][0] for i in idxs if isinstance(word_time[i], tuple)), last_end)
-        prev = seed; words_out = []
-        for i in idxs:
-            wt = word_time[i]
-            if isinstance(wt, tuple):
-                s, e = wt; prev = e
-            else:
-                s = e = prev                          # unaligned/punctuation: zero-width at prev
-            words_out.append({"w": tokens[i]["w"], "s": round(s, 3), "e": round(e, 3)})
-        start = words_out[0]["s"] if words_out else last_end
-        end = max((w["e"] for w in words_out), default=last_end)
-        last_end = max(last_end, end)
-        segments.append({"id": si, "start": round(start, 3), "end": round(end, 3),
-                         "text": sentences[si], "words": words_out})
+    # Extracted to assemble_segments (cut-aware, but a no-op for the greedy aligner which never marks
+    # a token 'CUT'). Identical output to the old inline block for this script.
+    segments = assemble_segments(tokens, sentences, word_time)
+    last_end = max((s["end"] for s in segments), default=0.0)
 
     doc = {"title": a.title, "audio": os.path.basename(a.audio[0]), "segments": segments}
     if a.chapters:

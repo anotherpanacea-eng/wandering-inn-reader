@@ -17,11 +17,8 @@ except Exception:
     pass
 
 from schema import validate_doc
+from asr_overlap import norm, words_of, overlap_score   # shared with align_book_editaware's resync
 import wps_check
-
-_KEEP = re.compile(r"[^a-z']")
-def norm(w): return _KEEP.sub("", w.lower()).strip("'")
-def words_of(text): return [w for w in (norm(x) for x in text.split()) if w]
 
 def track_no(s):
     m = re.search(r"(\d+)", os.path.basename(s))
@@ -117,8 +114,7 @@ def main():
             t0 = round(min(frac * dur, dur - a.win), 1)
             atext = aligned_window(segs, t0, t0 + a.win)
             heard = asr(ap_path, t0)
-            aw, hw = set(words_of(atext)), set(words_of(heard))
-            overlap = (len(aw & hw) / len(aw)) if aw else 0.0
+            overlap = overlap_score(words_of(atext), words_of(heard))
             ok = overlap >= a.min_overlap
             total += 1; failed += 0 if ok else 1
             print(f"\n  t={t0/60:5.1f}min  overlap={overlap:.2f}  {'PASS' if ok else 'FLAG'}", flush=True)

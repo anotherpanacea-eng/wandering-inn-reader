@@ -13,6 +13,7 @@ pipeline/*.txt
 !pipeline/book12_track_map.json
 sync*.json
 align*.json
+*.cuts.json
 volume*.mp3
 
 # Wayback raw-HTML snapshot cache (fetch_text.py --wayback): cached author prose,
