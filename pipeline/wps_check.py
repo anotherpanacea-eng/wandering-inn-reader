@@ -67,6 +67,17 @@ def screen(units, tol=DEFAULT_TOL, abs_lo=DEFAULT_ABS_LO, abs_hi=DEFAULT_ABS_HI)
     outlier -- mis-boundaries come in adjacent high/low pairs, and the slack member can sit just inside
     tol; REVIEW P2-1b). SYSTEMATIC failure if the median itself leaves the sane band or > 40% of units
     flag (a noisy median can hide relative outliers but cannot move the absolute band)."""
+    # The thresholds are part of a HARD gate. A non-finite tol/abs_lo/abs_hi makes EVERY comparison
+    # against it False, silently DISABLING relative or absolute detection -- and in the small-sample
+    # path (too_few) the absolute band is the ONLY gate, so non-finite bounds let every short map
+    # pass unscreened. A malformed threshold must fail loud, never quietly PASS units (Codex P1).
+    tol = float(tol); abs_lo = float(abs_lo); abs_hi = float(abs_hi)
+    if not (math.isfinite(tol) and tol >= 0):
+        raise ValueError(f"wps tol must be a finite, non-negative number; got {tol!r}")
+    if not (math.isfinite(abs_lo) and math.isfinite(abs_hi)):
+        raise ValueError(f"wps absolute band must be finite; got abs_lo={abs_lo!r} abs_hi={abs_hi!r}")
+    if abs_lo > abs_hi:
+        raise ValueError(f"wps absolute band is inverted: abs_lo={abs_lo} > abs_hi={abs_hi}")
     n = len(units)
     wps = [float(u["wps"]) for u in units]
     # A non-finite wps (NaN/inf -- a zero/garbage duration or word count) must NEVER bypass a HARD gate:
@@ -358,7 +369,10 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
-    passed, _ = run(a)
+    try:
+        passed, _ = run(a)
+    except ValueError as e:
+        sys.exit(f"WPS SCREEN ABORT: {e}")     # a malformed threshold fails loud, never a silent pass
     if not passed and a.strict and not a.allow_wps_outliers:
         sys.exit("WPS SCREEN FAIL (--strict).")
     if not passed and a.allow_wps_outliers:

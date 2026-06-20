@@ -111,6 +111,29 @@ def test_nonfinite_wps_cannot_bypass_hard_gate():
         assert math.isfinite(r["median"]) and abs(r["median"] - 2.36) < 1e-9, r["median"]  # median uncorrupted
 
 
+def test_nonfinite_thresholds_cannot_bypass_hard_gate():
+    # Codex #22 (follow-up): a non-finite tol/abs_lo/abs_hi makes every comparison False, silently
+    # disabling relative or absolute detection -- and in the small-sample (too_few) path the absolute
+    # band is the ONLY gate. A malformed threshold must RAISE (fail loud), never quietly PASS units.
+    def _raises(**kw):
+        try:
+            wps_check.screen(_book(), **kw)
+            return False
+        except ValueError:
+            return True
+    assert _raises(tol=float("nan")), "tol=NaN must be rejected, not silently disable relative detection"
+    assert _raises(tol=float("inf")), "tol=inf must be rejected"
+    assert _raises(abs_lo=float("nan")), "non-finite abs_lo must be rejected"
+    assert _raises(abs_hi=float("inf")), "non-finite abs_hi must be rejected"
+    assert _raises(abs_lo=3.5, abs_hi=1.7), "inverted absolute band must be rejected"
+    # the small-sample path must NOT become a bypass: a short map with non-finite bounds still raises
+    try:
+        wps_check.screen(_book(n=3), abs_lo=float("nan"), abs_hi=float("nan"))
+        assert False, "small-sample + non-finite bounds bypassed the gate"
+    except ValueError:
+        pass
+
+
 def main():
     test_clean_book_passes()
     test_squished_slack_pair_flags_both_and_reports_pair()
@@ -121,8 +144,9 @@ def main():
     test_too_few_units_absolute_band_only()
     test_chapter_wps_zero_on_bad_duration()
     test_nonfinite_wps_cannot_bypass_hard_gate()
+    test_nonfinite_thresholds_cannot_bypass_hard_gate()
     print("OK test_wps_check: clean / pair+report / association / 1.7-floor / systematic(band) / "
-          "systematic(majority) / too-few / unmeasured / non-finite all pass")
+          "systematic(majority) / too-few / unmeasured / non-finite-wps / non-finite-thresholds all pass")
 
 
 if __name__ == "__main__":
