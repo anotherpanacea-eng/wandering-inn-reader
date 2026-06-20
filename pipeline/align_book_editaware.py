@@ -129,15 +129,21 @@ def rollback_skip(word_time, cut_spans, align_idx, entry, cur_pos):
     CONSUMED that audio (AudioStream never seeks backward by design). So the audio the restored span
     [a0, cur_pos) needed is GONE; it cannot be re-aligned to its true position. Rewinding the cursor to
     a0 (the previous behavior) would silently re-align the restored text against the NEXT, LATER audio
-    -- a smear (Codex P1). Instead: clear the whole [a0, cur_pos) span to None (an HONEST unaligned
-    gap), drop the cut_spans entry, and KEEP the cursor at cur_pos so subsequent text aligns to
-    subsequent audio and the lost stretch is a VISIBLE gap, never a wrong alignment. (A fully-recovering
-    fix would defer the confirm-step commit so the audio survives a rollback -- that needs an
-    AudioStream-level rewind, out of scope here.) `entry` must be the cut_spans tail. Pure."""
+    -- a smear (Codex P1). Instead: mark the whole [a0, cur_pos) span 'CUT' (an HONEST unaligned gap
+    that assemble_segments renders as zero-duration segments WITHOUT truncating later content -- using
+    None instead made first_unaligned truncate every later segment), drop the cut_spans entry, and KEEP
+    the cursor at cur_pos so subsequent text aligns to subsequent audio and the lost stretch is a
+    VISIBLE gap, never a wrong alignment. (A fully-recovering fix would defer the confirm-step commit so
+    the audio survives a rollback -- that needs an AudioStream-level rewind, out of scope here.)
+    `entry` must be the cut_spans tail. Pure."""
     a0 = entry["a0"]
     end = max(entry["a1"], cur_pos)
     for p in range(a0, end):
-        word_time[align_idx[p]] = None             # honest gap: unrecoverable audio, not a re-alignment
+        # Mark the unrecoverable span 'CUT', NOT None. assemble_segments' first_unaligned IGNORES
+        # 'CUT' (it becomes a zero-duration GAP segment) but treats None as "not yet reached" and
+        # TRUNCATES every later segment — clearing to None here dropped all subsequent aligned content
+        # (Codex P1 regression). 'CUT' = an honest unaligned gap; later segments survive, still no smear.
+        word_time[align_idx[p]] = "CUT"
     if cut_spans and cut_spans[-1] is entry:
         cut_spans.pop()
     return end                                      # keep the cursor FORWARD -- no rewind, no smear

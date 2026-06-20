@@ -127,8 +127,10 @@ def test_rollback_gaps_forward_no_smear():
     """rollback_skip (Codex #23 follow-up): the confirm rejected the skip, but the confirm step already
     committed AND irreversibly consumed the post-skip audio (AudioStream never seeks backward). Rewinding
     the cursor to a0 would silently re-align the restored text against LATER audio (a smear). So rollback
-    clears the WHOLE [a0, cur_pos) span to None (an honest gap), drops the entry, and KEEPS the cursor
-    FORWARD (returns cur_pos) -- never a rewind, never a smear."""
+    marks the WHOLE [a0, cur_pos) span 'CUT' (an honest gap that assemble_segments renders as
+    zero-duration segments WITHOUT truncating later content -- None would make first_unaligned drop
+    everything after), drops the entry, and KEEPS the cursor FORWARD (returns cur_pos) -- never a
+    rewind, never a smear."""
     tokens, align_idx = _tokens_and_idx()
     word_time = [None] * len(tokens)
     cut_spans = []
@@ -143,9 +145,41 @@ def test_rollback_gaps_forward_no_smear():
     restored = ea.rollback_skip(word_time, cut_spans, align_idx, entry, cur_pos)
     assert restored == cur_pos, f"cursor must stay FORWARD (no rewind/smear); got {restored} want {cur_pos}"
     assert cut_spans == [], "the cut entry must be removed"
-    # the WHOLE [a0, cur_pos) span (CUT marks + stale confirm commits) is an honest unaligned gap:
-    assert all(word_time[align_idx[p]] is None for p in range(pos, cur_pos)), \
-        "rollback must clear the skip span AND the stale confirm-step commits to None (a gap)"
+    # the WHOLE [a0, cur_pos) span (skip marks + stale confirm commits) is marked 'CUT' (the gap
+    # sentinel assemble_segments tolerates), NOT None (which truncates every later segment):
+    assert all(word_time[align_idx[p]] == "CUT" for p in range(pos, cur_pos)), \
+        "rollback must mark the skip span AND the stale confirm-step commits 'CUT' (a gap, not None)"
+
+
+def test_rollback_gap_does_not_truncate_later_aligned_segments():
+    """Codex #23 (regression): a rollback gap marked None made assemble_segments' first_unaligned
+    truncate every later segment. Marked 'CUT', the gap renders as zero-duration segments and the
+    LATER, real-aligned sentences survive."""
+    tokens, align_idx = _tokens_and_idx()
+    word_time = [None] * len(tokens)
+    cut_spans = []
+    pos = _seg_start_pos(tokens, align_idx, CUT_FROM_SEG)
+    to_start = _seg_start_pos(tokens, align_idx, CUT_TO_SEG)
+    # align everything BEFORE the cut with real timestamps (so the start isn't what truncates)
+    t = 0.0
+    for p in range(0, pos):
+        word_time[align_idx[p]] = (t, t + 0.4); t += 0.4
+    a1 = ea.apply_skip(word_time, cut_spans, align_idx, pos, to_start - pos, 12.3)
+    entry = cut_spans[-1]
+    cur_pos = min(a1 + 3, len(align_idx))
+    for p in range(a1, cur_pos):
+        word_time[align_idx[p]] = (float(p), float(p) + 0.5)
+    ea.rollback_skip(word_time, cut_spans, align_idx, entry, cur_pos)
+    # align every remaining word AFTER the gap with real, increasing timestamps
+    t = 100.0
+    for p in range(cur_pos, len(align_idx)):
+        word_time[align_idx[p]] = (t, t + 0.4); t += 0.4
+    n_sents = max(tok["seg"] for tok in tokens) + 1
+    sentences = [f"sentence {i}" for i in range(n_sents)]
+    segs = assemble_segments(tokens, sentences, word_time)
+    # the LAST sentence (well after the rollback gap) must survive — not truncated away
+    assert any(s["id"] == n_sents - 1 for s in segs), \
+        "later aligned segments were truncated by the rollback gap"
 
 
 def test_assemble_emits_valid_zero_duration_gap_segments():
@@ -312,6 +346,7 @@ def main():
     test_forward_match_on_cursor_does_not_fire()
     test_apply_skip_marks_cut_and_advances()
     test_rollback_gaps_forward_no_smear()
+    test_rollback_gap_does_not_truncate_later_aligned_segments()
     test_assemble_emits_valid_zero_duration_gap_segments()
     test_no_cut_assembles_like_the_greedy_path()
     test_starved_step_flags_under_committed()
