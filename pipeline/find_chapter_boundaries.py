@@ -43,6 +43,12 @@ def main():
     ap.add_argument("--refine-window", type=float, default=300.0, help="+/- seconds ASR'd around each estimate")
     ap.add_argument("--chunk", type=float, default=20.0, help="refine sub-chunk seconds (= start accuracy)")
     ap.add_argument("--anchor-sec", type=float, default=30.0)
+    ap.add_argument("--conf-min", type=float, default=0.30,
+                    help="min track-opening ASR overlap for a TRUSTED anchor; below this the anchor "
+                         "is dropped and its region falls back to the proportional estimate")
+    ap.add_argument("--min-anchors", type=int, default=None,
+                    help="min trusted interior anchors for a usable run (default: max(2, half the "
+                         "tracks)); below it the output is marked reliable=false and exit is nonzero")
     a = ap.parse_args()
 
     SR = 16000
@@ -118,16 +124,42 @@ def main():
         return best_i, best
 
     # ---- (1) ANCHOR ----
+    # A track opening becomes a TRUSTED anchor only when its ASR overlap clears --conf-min. locate_seg
+    # returns confidence 0.0 on empty/no-overlap ASR; installing that as a real anchor would route
+    # interpolation through a fabricated segment location (Codex P1). Low-confidence anchors are
+    # dropped, so their region falls back to the proportional estimate via the structural bookends.
     print("\n=== ANCHOR (track openings -> seg) ===", flush=True)
-    anchors = []                                              # (global_time, seg)
+    raw = []                                                  # (global_time, seg, conf)
     for t in tracks:
         est = int(round(t["g0"] / total_dur * total_segs))
         heard = asr(read_global(t["g0"], a.anchor_sec))
         seg_i, conf = locate_seg(words_of(heard), est)
-        anchors.append((t["g0"], seg_i))
-        print(f"  track @{t['g0']/60:7.1f}min  est_seg {est:6d} -> seg {seg_i:6d} (ov {conf:.2f})", flush=True)
-    anchors.append((total_dur, total_segs))
-    anchors = sorted(set(anchors))
+        raw.append((t["g0"], seg_i, conf))
+        flag = "" if conf >= a.conf_min else "  <-- DROPPED (conf < %.2f; proportional fallback)" % a.conf_min
+        print(f"  track @{t['g0']/60:7.1f}min  est_seg {est:6d} -> seg {seg_i:6d} (ov {conf:.2f}){flag}",
+              flush=True)
+
+    # Keep trusted anchors in time order, enforcing seg-monotonicity: a trusted anchor whose seg does
+    # not advance past the last kept one is a mis-localization, not a usable interpolation point.
+    trusted, last_seg = [], -1
+    for g0, seg_i, conf in sorted(raw):
+        if conf < a.conf_min:
+            continue
+        if seg_i <= last_seg:
+            print(f"  track @{g0/60:7.1f}min  seg {seg_i} not monotonic (<= {last_seg}) -- dropped",
+                  flush=True)
+            continue
+        trusted.append((g0, seg_i)); last_seg = seg_i
+    n_trusted = len(trusted)
+
+    # Structural bookends are known-true (not ASR-derived): the book starts at (0, 0) and ends at
+    # (total_dur, total_segs). Where no trusted anchor brackets a segment, interp_time then degrades
+    # to the global proportional estimate rather than interpolating through a fabricated point.
+    anchors = sorted(set([(0.0, 0)] + trusted + [(total_dur, total_segs)]))
+
+    min_anchors = a.min_anchors if a.min_anchors is not None else max(2, (len(tracks) + 1) // 2)
+    print(f"\n{n_trusted} trusted interior anchor(s) (need >= {min_anchors}); "
+          f"{len(tracks) - n_trusted} track opening(s) fell back to proportional", flush=True)
 
     def interp_time(seg):
         for i in range(len(anchors) - 1):
@@ -169,15 +201,32 @@ def main():
         print(f"  [{title:34s}] est {est/60:7.1f}min -> start {t_ref/60:7.1f}min  (ov {ov:.2f}){flag}",
               flush=True)
 
-    # monotonicity check
+    # ---- reliability gate ----
+    # The boundaries are only as trustworthy as the anchors interpolated through. Two failure modes
+    # make the output UNUSABLE rather than merely imperfect: too few trusted anchors (the run is
+    # mostly proportional guessing), or non-monotonic chapter starts (a refine landed wrong). In
+    # either case mark reliable=false, explain why, and exit nonzero so a caller cannot treat a
+    # written file as a completed boundary set (Codex P1).
     starts = [r["start"] for r in results]
+    reasons = []
+    if n_trusted < min_anchors:
+        reasons.append(f"only {n_trusted} trusted anchor(s) (< {min_anchors}); boundaries are "
+                       f"largely proportional estimates, not measured")
     if starts != sorted(starts):
-        print("\n!! WARNING: chapter starts are NOT monotonic -- a refine landed wrong; inspect above.",
-              flush=True)
+        reasons.append("chapter starts are NOT monotonic -- a refine landed wrong; inspect the log")
+    reliable = not reasons
     json.dump({"total_dur": round(total_dur, 2), "tracks": [t["path"] for t in tracks],
+               "reliable": reliable, "unreliable_reasons": reasons, "trusted_anchors": n_trusted,
                "chapters": results}, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-    print(f"\nwrote {a.out} ({len(results)} chapter boundaries)", flush=True)
+    if reliable:
+        print(f"\nwrote {a.out} ({len(results)} chapter boundaries; reliable)", flush=True)
+        return 0
+    print(f"\n!! UNRELIABLE OUTPUT -- wrote {a.out} with reliable=false:", flush=True)
+    for r in reasons:
+        print(f"   - {r}", flush=True)
+    print("   Verify before use; downstream cutting must not consume this as-is.", flush=True)
+    return 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -74,9 +74,12 @@ spec  →  review  →  write  →  review  →  fix  →  merge
       chapters so a chapter boundary falls *mid-track* — the per-chapter-anchoring
       precondition fails): `find_chapter_boundaries.py` locates each web chapter's START
       time in the continuous (concatenated) audio — ANCHOR (ASR each track opening →
-      fuzzy-locate it in the text → `(global_time, seg)` pairs → piecewise-linear interp)
-      then REFINE (ASR a window around each chapter's estimated start → best-overlap
-      sub-chunk), emitting monotonic boundaries (low-confidence flagged). Those boundaries
+      fuzzy-locate it in the text → keep only **trusted** `(global_time, seg)` pairs that
+      clear `--conf-min`, plus the `(0,0)`/`(end)` bookends → piecewise-linear interp;
+      dropped/low-confidence openings fall back to the proportional estimate) then REFINE
+      (ASR a window around each chapter's estimated start → best-overlap sub-chunk). The
+      output carries a `reliable` flag; too few trusted anchors (`--min-anchors`) or
+      non-monotonic starts mark it `reliable=false` and exit nonzero. Those boundaries
       then cut per-chapter audio across track edges → `align_chapters.py --auto-wps` →
       package. (A very long continuous unit drifts under one greedy pass; split it into
       ~200-min sub-units and recombine — see the Book-17 notes.)
