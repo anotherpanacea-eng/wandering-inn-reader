@@ -83,6 +83,38 @@ def main():
     web = json.load(open(a.chapters, encoding="utf-8"))
     if len(web) != len(ch):
         sys.exit(f"{a.chapters} has {len(web)} web chapters but {a.boundaries} has {len(ch)} boundary entries")
+
+    # find_chapter_boundaries.py marks an unusable run reliable=false; refuse to build units from one.
+    if bnd.get("reliable") is False:
+        sys.exit(f"refusing to emit units -- {a.boundaries} is reliable=false: "
+                 f"{bnd.get('unreliable_reasons') or 'see boundary-finder log'}")
+
+    # Validate the boundary starts BEFORE emitting any of the three files: they must be numeric,
+    # non-negative, strictly ascending, and end before total_dur, with non-decreasing seg order
+    # (time forward => text forward). Without this a non-monotonic boundaries file (e.g. starts
+    # [10, 5] with total_dur 20) silently writes negative-duration units at exit 0 (Codex P1).
+    if not isinstance(total, (int, float)) or total <= 0:
+        sys.exit(f"{a.boundaries} total_dur is not a positive number: {total!r}")
+    errs, prev_s, prev_seg = [], None, None
+    for i, c in enumerate(ch):
+        s, seg, title = c.get("start"), c.get("seg"), c.get("title")
+        if not isinstance(s, (int, float)):
+            errs.append(f"chapter {i} ({title!r}) start is not numeric: {s!r}"); continue
+        if s < 0:
+            errs.append(f"chapter {i} ({title!r}) start {s} is negative")
+        if s >= total:
+            errs.append(f"chapter {i} ({title!r}) start {s} >= total_dur {total}")
+        if prev_s is not None and s <= prev_s:
+            errs.append(f"chapter {i} ({title!r}) start {s} is not after chapter {i-1} start {prev_s} "
+                        f"(starts must be strictly ascending)")
+        if prev_seg is not None and isinstance(seg, int) and seg < prev_seg:
+            errs.append(f"chapter {i} ({title!r}) seg {seg} < chapter {i-1} seg {prev_seg} "
+                        f"(seg order must be non-decreasing)")
+        prev_s, prev_seg = s, (seg if isinstance(seg, int) else prev_seg)
+    if errs:
+        sys.exit("refusing to emit units -- invalid boundary starts in %s:\n  %s"
+                 % (a.boundaries, "\n  ".join(errs)))
+
     starts = [c["start"] for c in ch] + [total]
 
     ranges = parse_merges(a.merge, len(ch))
