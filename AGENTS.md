@@ -4,13 +4,15 @@ This repo is single-author (`anotherpanacea-eng`) but multi-agent: Claude sessio
 and Codex sessions both contribute. This document is the durable, tool-agnostic
 record of how they should work here. `CLAUDE.md` is a thin pointer to this file.
 
-**Not part of the SETEC / APODICTIC fleet.** This is a standalone personal tool —
-a read-along audiobook player plus a forced-alignment pipeline. There is no
-cross-repo dependency, no vendored contract, no weekly-sync bot. Do **not** bolt
-the fleet's vendor/lock/drift-gate machinery onto it; the right move here is
-restraint (the same instinct that says "don't build a shared library for two
-consumers"). The operator's local `Cowork/repo-fleet/` hub documents the fleet,
-not this repo, and is invisible to cloud containers.
+**Standalone fleet member (#6, promoted 2026-06-20).** This is a standalone personal
+tool — a read-along audiobook player plus a forced-alignment pipeline — tracked in the
+operator's SETEC / APODICTIC fleet by **shared machines** (GPU work on Code-PC) and the
+**shared `spec→review→…→merge` Codex-gate workflow**, but it sits **OUTSIDE the SETEC
+dependency chain**: there is no cross-repo dependency, no vendored contract, no weekly-sync
+bot. Do **not** bolt the fleet's vendor/lock/drift-gate machinery onto it; the right move
+here is restraint (the same instinct that says "don't build a shared library for two
+consumers"). The operator's local `Cowork/repo-fleet/` hub documents the fleet (this repo
+is registered under "Beyond the four core repos"), and is invisible to cloud containers.
 
 ## The flow
 
