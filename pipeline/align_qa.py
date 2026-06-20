@@ -214,8 +214,13 @@ def cmd_profile(a):
     audio_by_no = {track_no(p): p for p in glob.glob(a.audio_glob) if track_no(p)}
     aligns = {track_no(p): p for p in glob.glob(os.path.join(a.dir, "align*.json")) if track_no(p)}
     # also accept per-CHAPTER outputs (chapNN_*.json) so profile works pre-recombine
+    audio_offset = 0
     if not aligns:
         aligns = {track_no(p): p for p in glob.glob(os.path.join(a.dir, "chap*.json")) if track_no(p)}
+        # align_chapters.py emits 0-indexed chapNN_*.json, but the matching per-chapter audio is
+        # 1-indexed (chap00 <-> 01.wav/01.mp3). Resolve audio at chap_index + 1 instead of equating
+        # filename numbers, else every chapter is skipped as "no audio" -> no windows sampled (Codex P2).
+        audio_offset = 1
     if not aligns:
         sys.exit(f"no align*.json / chap*.json in {a.dir}")
     avail = sorted(aligns)
@@ -243,9 +248,11 @@ def cmd_profile(a):
         key = next((k for k in aligns if k.zfill(2) == tno), None)
         if key is None:
             print(f"\n[{tno}] (no align JSON)"); continue
-        anum = next((k for k in audio_by_no if k.zfill(2) == tno), None)
+        want_audio = str(int(tno) + audio_offset).zfill(2)
+        anum = next((k for k in audio_by_no if k.zfill(2) == want_audio), None)
         if anum is None:
-            print(f"\n[{tno}] (no audio for track)"); continue
+            extra = f" -> audio {want_audio}" if audio_offset else ""
+            print(f"\n[{tno}] (no audio for track{extra})"); continue
         with open(aligns[key], encoding="utf-8") as f:
             doc = json.load(f)
         validate_doc(doc, source=aligns[key])
@@ -275,9 +282,12 @@ def cmd_profile(a):
             atext = aligned_window(segs, t0, t1)
             heard = asr(apath, t0)
             ov = overlap_of(atext, heard)
+            # Metrics use the FULL window text; the stored snippets are capped at --snippet so EVERY
+            # output that carries them (machine --json, report, HTML) honors the IP guard, not only
+            # the report/HTML which truncate at render time (Codex P1).
             records.append({"i": i, "t0": t0, "t1": round(t1, 1), "overlap": round(ov, 3),
                             "n_aligned": len(set(words_of(atext))), "n_heard": len(set(words_of(heard))),
-                            "align_text": atext, "heard_text": heard})
+                            "align_text": atext[:a.snippet], "heard_text": heard[:a.snippet]})
             # thermal: cooldown after every --cooldown-every wall-seconds of sustained GPU load
             if a.cooldown_every and (time.time() - cool_anchor) >= a.cooldown_every and i < len(t0s) - 1:
                 print(f"  COOLDOWN: idling {a.cooldown:.0f}s (GPU quiescent to shed heat)", flush=True)
@@ -485,16 +495,22 @@ def _renumber(segs):
 
 
 def _backup(path):
-    """Demote the prior file to .bak before overwriting (mirrors align_book.save_ckpt)."""
-    if os.path.exists(path):
-        bak = path + ".bak"
-        try:
-            if os.path.exists(bak):
-                os.remove(bak)
-            os.replace(path, bak)
-            print(f"  kept backup -> {os.path.basename(bak)}", flush=True)
-        except OSError as e:
-            print(f"  ! could not write .bak ({e}); proceeding", file=sys.stderr)
+    """Demote the prior file to .bak before overwriting (mirrors align_book.save_ckpt). Returns True
+    when the prior file is safely preserved (nothing to back up, or it was moved to .bak); returns
+    False when a prior file EXISTS but could not be backed up. On failure os.replace leaves the
+    original intact, so the caller must refuse to overwrite rather than destroy it (Codex P1)."""
+    if not os.path.exists(path):
+        return True
+    bak = path + ".bak"
+    try:
+        if os.path.exists(bak):
+            os.remove(bak)
+        os.replace(path, bak)
+        print(f"  kept backup -> {os.path.basename(bak)}", flush=True)
+        return True
+    except OSError as e:
+        print(f"  ! could not write .bak ({e})", file=sys.stderr)
+        return False
 
 
 def _op_offset(doc, op):
@@ -677,7 +693,9 @@ def cmd_correct(a):
               f"{len(doc.get('chapters', []))} chapters -- NOT written.", flush=True)
         return
 
-    _backup(target)
+    if not _backup(target):
+        sys.exit(f"REFUSING TO WRITE -- could not back up {target} to {target}.bak; the original is "
+                 f"unchanged. Clear the .bak path (remove it / fix permissions) and re-run.")
     with open(target, "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, indent=2)
     print(f"\nwrote {target}: {len(doc['segments'])} segments, {len(doc.get('chapters', []))} chapters "
