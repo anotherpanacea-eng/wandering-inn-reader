@@ -107,10 +107,19 @@ def main():
         if prev_s is not None and s <= prev_s:
             errs.append(f"chapter {i} ({title!r}) start {s} is not after chapter {i-1} start {prev_s} "
                         f"(starts must be strictly ascending)")
-        if prev_seg is not None and isinstance(seg, int) and seg < prev_seg:
+        # seg indexes into segments[]; it must be a non-negative INTEGER (not a float / string /
+        # None / bool) and non-decreasing — else a malformed seg bypasses the check and flows into
+        # units/trackmap downstream (Codex P2). bool is an int subclass, so exclude it explicitly.
+        if not isinstance(seg, int) or isinstance(seg, bool):
+            errs.append(f"chapter {i} ({title!r}) seg is not an integer: {seg!r}")
+        elif seg < 0:
+            errs.append(f"chapter {i} ({title!r}) seg {seg} is negative")
+        elif prev_seg is not None and seg < prev_seg:
             errs.append(f"chapter {i} ({title!r}) seg {seg} < chapter {i-1} seg {prev_seg} "
                         f"(seg order must be non-decreasing)")
-        prev_s, prev_seg = s, (seg if isinstance(seg, int) else prev_seg)
+        prev_s = s
+        if isinstance(seg, int) and not isinstance(seg, bool) and seg >= 0:
+            prev_seg = seg
     if errs:
         sys.exit("refusing to emit units -- invalid boundary starts in %s:\n  %s"
                  % (a.boundaries, "\n  ".join(errs)))
