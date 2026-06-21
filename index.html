@@ -366,10 +366,14 @@
     }
     const total = Math.max(1, Math.round(rd.scrollWidth / pageW));
     pages=[]; pageSeg=[];
+    // Each column is a page; its anchor is the FIRST segment starting in that column (its top-left),
+    // so turnPage()/resume/read->listen handoff land at the top of the page. If no segment starts in a
+    // column (a long segment spans into it), carry that spanning segment forward as the anchor.
     let si=0;
-    for(let p=0;p<total;p++){                       // each column is a page; its anchor seg is the one at its top-left
-      while(si+1<segEls.length && segPage[si+1]<=p) si++;
-      pages.push({seg:si, start:segStart[si]||0}); pageSeg.push(si);
+    for(let p=0;p<total;p++){
+      while(si<segEls.length && segPage[si]<p) si++;        // first segment whose start column is >= p
+      const anchor = (si<segEls.length && segPage[si]===p) ? si : Math.max(0, si-1);
+      pages.push({seg:anchor, start:segStart[anchor]||0}); pageSeg.push(anchor);
     }
     if(curPage>=pages.length) curPage=pages.length-1;
   }
