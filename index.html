@@ -366,17 +366,26 @@
     }
     const total = Math.max(1, Math.round(rd.scrollWidth / pageW));
     pages=[]; pageSeg=[];
-    // Each column is a page; its anchor is the FIRST segment starting in that column (its top-left),
-    // so turnPage()/resume/read->listen handoff land at the top of the page. If no segment starts in a
-    // column (a long segment spans into it), carry that spanning segment forward as the anchor.
-    let si=0;
-    for(let p=0;p<total;p++){
-      while(si<segEls.length && segPage[si]<p) si++;        // first segment whose start column is >= p
-      const anchor = (si<segEls.length && segPage[si]===p) ? si : Math.max(0, si-1);
+    for(const anchor of pagedAnchors(segPage, total)){
       pages.push({seg:anchor, start:segStart[anchor]||0}); pageSeg.push(anchor);
     }
     if(curPage>=pages.length) curPage=pages.length-1;
   }
+  // Page anchors for paged mode. anchor[p] = the FIRST segment starting in column p
+  // (its top-left), so turnPage()/resume/read->listen handoff land at the TOP of the
+  // page. If a column has no segment start (a long segment spans into it), carry that
+  // spanning segment forward as the anchor. (The pre-fix loop took the LAST segment
+  // whose start column was <= p, which made resume jump forward — Codex P1, PR #27.)
+  // Pure + side-effect-free so tests/test_paged_anchor.mjs can exercise it directly.
+  function pagedAnchors(segPage, total){
+    const out=[]; let si=0; const n=segPage.length;
+    for(let p=0;p<total;p++){
+      while(si<n && segPage[si]<p) si++;                    // first segment whose start column is >= p
+      out.push((si<n && segPage[si]===p) ? si : Math.max(0, si-1));
+    }
+    return out;
+  }
+  if(typeof globalThis!=="undefined" && typeof window==="undefined") globalThis.pagedAnchors=pagedAnchors;  // test hook (Node only)
   function relayoutPaged(){                          // re-measure + keep the current place on screen
     if(!(paged && readerReady())) return;
     const i=(audio.paused && readingSeg>=0) ? readingSeg : (curSeg>=0?curSeg:0);
