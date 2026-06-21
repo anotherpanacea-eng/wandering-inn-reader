@@ -16,9 +16,10 @@ Two pieces:
    and offers one-tap **Resume** next time. It also has: **chapter navigation** (a ☰
    menu + inline chapter headers, when the sync file carries chapters), a **page
    counter**, **lock-screen / headphone controls** (play, pause, ±15s, chapter skip,
-   now-playing title — so you can pocket the phone), **text size**,
-   **keep-screen-on** while playing, and a **sleep timer** (15/30/45 min or
-   end-of-chapter). Tap **Aa** for those; everything persists.
+   now-playing title — so you can pocket the phone), a **reading mode** toggle
+   (scroll down, or left-right **page-flip**), **text size**, **keep-screen-on**
+   while playing, and a **sleep timer** (15/30/45 min or end-of-chapter). Tap **Aa**
+   for those; everything persists.
 2. **`pipeline/`** — a one-time job you run on your Mac (or the GPU PC) to produce
    the sync file. It does **forced alignment**: it takes the audio plus the text
    that already exists and computes the timestamps. It does not transcribe, so you
@@ -34,7 +35,8 @@ in-limits excerpt) so you can see the read-along: the sentence brightens, each w
 glows as it's spoken, the page follows, and tapping a line seeks the audio. Pause and
 the reader becomes a book — turn pages, read ahead, then play to continue from where
 you read. The "Follow" button toggles auto-scroll; the ☰ menu shows the chapter and
-page, and **Aa** has text size, keep-screen-on, and the sleep timer.
+page, and **Aa** has the reading mode (scroll or left-right pages), text size,
+keep-screen-on, and the sleep timer.
 
 To get it onto your iPhone: put this folder in iCloud Drive or Dropbox, open
 `index.html` from the Files app in Safari. For your real audio later, use the two
@@ -321,11 +323,13 @@ this is for your own use, not redistribution.
 ## Status
 
 - Player: built and working (demo included). Chapters, lock-screen / headphone
-  controls, one-tap resume, text size, keep-screen-on, and sleep timer are in.
+  controls, one-tap resume, text size, keep-screen-on, sleep timer, and a
+  **scroll / left-right-pages reading-mode toggle** are in.
   **Read↔listen handoff via pages** (paged navigation + a single place-marker shared
   between reading and listening) is in; its page math and handoff/restore logic are
   unit-checked, the render path is logic-checked. A browser can't be driven from a
-  cloud session, so the on-device UI is best confirmed by opening the demo.
+  cloud session, so the on-device UI is best confirmed by opening the demo — the
+  paginated mode's CSS-column geometry in particular wants an on-device eyeball.
 - `align.py` (aeneas → JSON, now with `--chapters`): built and tested.
 - `align_torch.py` (torchaudio `MMS_FA`, word-level, no aeneas): built **and run
   end-to-end on real Book 12 audio** (track 02, CPU) — 60 sentences / ~1,000 word
