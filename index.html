@@ -187,7 +187,7 @@
   // reading mode: false = vertical scroll (default), true = left-right pagination (CSS columns)
   const MODE_KEY="inn-reader-mode";
   let paged = (localStorage.getItem(MODE_KEY)==="paged");
-  let segPage=[], pageW=0, colPad=0, relayoutT=0;   // paged geometry: segPage[i]=start column; pageW=px/page
+  let segPage=[], pageW=0, colPad=0, relayoutT=0, pgFollowWord=-1;   // paged geometry: segPage[i]=start column; pageW=px/page; pgFollowWord=last word the page followed
   let lastUserInput=0, scrollT=0, pendingReadSeg=-1, pausedAt=0;
   let playlist=null, pendingSeek=0, pendingAutoplay=false;   // continuous multi-track book
 
@@ -386,6 +386,19 @@
     return out;
   }
   if(typeof globalThis!=="undefined" && typeof window==="undefined") globalThis.pagedAnchors=pagedAnchors;  // test hook (Node only)
+  // The column index that CONTAINS a content-x: floor (NOT the round() buildPagesPaged uses
+  // for segment-START snapping). A word in the MIDDLE of a column (x≈2.5·pageW) must map to
+  // that column (2), never round up to the next (3) — so the spoken-word page-follow lands
+  // on the column the word is actually in. The +0.5 absorbs sub-pixel jitter at a column's
+  // left edge. Pure; exposed for tests (Node only).
+  function colFromContentX(x, pageW){ return Math.max(0, Math.floor((x+0.5)/(pageW||1))); }
+  if(typeof globalThis!=="undefined" && typeof window==="undefined") globalThis.colFromContentX=colFromContentX;
+  function colOfEl(e){                              // the column an inline element currently sits in
+    const rd=$("#reader"), rects=e.getClientRects();
+    const r = rects.length ? rects[0] : e.getBoundingClientRect();
+    const x = r.left - rd.getBoundingClientRect().left + rd.scrollLeft - colPad;
+    return Math.max(0, Math.min(pages.length-1, colFromContentX(x, pageW)));
+  }
   function relayoutPaged(){                          // re-measure + keep the current place on screen
     if(!(paged && readerReady())) return;
     const i=(audio.paused && readingSeg>=0) ? readingSeg : (curSeg>=0?curSeg:0);
@@ -465,7 +478,7 @@
       const p=segEls[curSeg]; p.classList.remove("cur"); p.textContent=segs[curSeg].text;
       if(audio.currentTime>=segs[curSeg].end) p.classList.add("read");
     }
-    curSeg=i; curWordEls=null;
+    curSeg=i; curWordEls=null; pgFollowWord=-1;
     const p=segEls[i]; if(!p) return;
     const sg=segs[i];
     if(sg.words && sg.words.length){          // expand current sentence into word spans
@@ -493,6 +506,19 @@
     // and never index ws[-1]. (k===active already short-circuits; the guard is explicit.)
     for(let k=0;k<curWordEls.length;k++)
       curWordEls[k].classList.toggle("on", active>=0 && k===active && t<=ws[active].e+0.05);
+    // Paged mode: a single long segment can span several columns, so the page must follow
+    // the spoken WORD's column — not just the segment's start column (pageOf, set once in
+    // setSeg). Without this the page stalls on the segment's first column while its later
+    // columns scroll past unread: playback "cannot advance pages" through a multi-column
+    // segment (Codex P1, PR #27). Recompute only when the active word changes (no per-frame
+    // layout reads), and honour the same follow / userScrollPause gate as setSeg.
+    if(paged && active>=0 && active!==pgFollowWord){
+      pgFollowWord=active;
+      if(follow && Date.now()>userScrollPause){
+        const col=colOfEl(curWordEls[active]);
+        if(col!==curPage){ goToCol(col,true); setPage(col); }
+      }
+    }
   }
   function setChap(t){
     const ci=findChap(t);

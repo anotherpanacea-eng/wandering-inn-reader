@@ -46,6 +46,24 @@ writeFileSync(modPath, `export ${extractPagedAnchors()}\n`);
 after(() => { try { rmSync(modPath); } catch {} });
 const { pagedAnchors } = await import(pathToFileURL(modPath).href);
 
+// Same shipped-source extraction for colFromContentX (the spoken-word page-follow math).
+function extractFn(sig) {
+  const i = html.indexOf(sig);
+  assert.notEqual(i, -1, `${sig}…) not found in index.html (was it renamed?)`);
+  let depth = 0, started = false, end = -1;
+  for (let j = i; j < html.length; j++) {
+    const c = html[j];
+    if (c === "{") { depth++; started = true; }
+    else if (c === "}") { depth--; if (started && depth === 0) { end = j + 1; break; } }
+  }
+  assert.notEqual(end, -1, `could not find the end of ${sig}`);
+  return html.slice(i, end);
+}
+const colModPath = join(tmpdir(), `col_from_x_${process.pid}.mjs`);
+writeFileSync(colModPath, `export ${extractFn("function colFromContentX(")}\n`);
+after(() => { try { rmSync(colModPath); } catch {} });
+const { colFromContentX } = await import(pathToFileURL(colModPath).href);
+
 const totalCols = (sp) => (sp.length ? sp[sp.length - 1] + 1 : 1);
 const anchors = (sp) => pagedAnchors(sp, totalCols(sp));
 
@@ -87,4 +105,28 @@ test("anchors are monotonic non-decreasing (resume never jumps backward page-to-
       );
     }
   }
+});
+
+// colFromContentX powers the spoken-word page-follow: as a long segment spans several
+// columns, the page advances to the column the active WORD sits in. The bug (Codex P1,
+// PR #27) was that playback could not advance the page through a multi-column segment —
+// the page stayed pinned to the segment's start column. The follow needs the column that
+// CONTAINS the word (floor), not the segment-start snap (round) buildPagesPaged uses.
+test("colFromContentX maps a MID-column word to that column, not the next (the P1 bug)", () => {
+  // pageW=100; columns are [0,100), [100,200), [200,300)…  A word at content-x=250 sits in
+  // column 2. round(250/100)=3 (the segment-start formula) would skip the page forward —
+  // exactly why a long segment could not page-advance. floor((250+0.5)/100)=2 is correct.
+  assert.equal(colFromContentX(250, 100), 2);
+  assert.equal(colFromContentX(120, 100), 1);
+  assert.equal(colFromContentX(0, 100), 0);
+});
+
+test("colFromContentX: exact column starts resolve to their own column (no +0.5 overshoot)", () => {
+  assert.equal(colFromContentX(100, 100), 1);
+  assert.equal(colFromContentX(200, 100), 2);
+});
+
+test("colFromContentX clamps to a non-negative column", () => {
+  assert.equal(colFromContentX(-50, 100), 0);
+  assert.equal(colFromContentX(-0.3, 100), 0);
 });
