@@ -31,4 +31,14 @@ python3 tests/test_editaware.py
 echo "→ wps-gate threshold-logic test"
 python3 tests/test_wps_check.py
 
+# Player logic check: the paged-mode page-anchor function (index.html). Uses Node's
+# built-in test runner only (no npm/deps). Skips with a notice if Node is absent so
+# the gate stays runnable on a Python-only box, but runs in CI / on dev machines.
+if command -v node >/dev/null 2>&1; then
+  echo "→ paged-anchor regression test (index.html pagedAnchors; Codex P1 PR #27)"
+  node --test tests/test_paged_anchor.mjs
+else
+  echo "→ paged-anchor regression test SKIPPED (node not found)"
+fi
+
 echo "✓ all local checks passed"
