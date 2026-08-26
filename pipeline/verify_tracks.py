@@ -10,14 +10,14 @@ exits nonzero if too many points fail -- so it can gate a ship in CI/scripts, no
 Run with the GPU interpreter (wav2vec2 ASR):
     py -3.12 verify_tracks.py --dir per_track_final --audio-glob "...\\*.mp3" [--tracks 02 21 35] [--points 5]
 """
-import argparse, glob, json, os, re, sys
+import argparse, glob, json, math, os, re, sys
 try:
     sys.stdout.reconfigure(encoding="utf-8"); sys.stderr.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
 from schema import validate_doc
-from asr_overlap import norm, words_of, overlap_score   # shared with align_book_editaware's resync
+from asr_overlap import norm, words_of, overlap_score, overlap_score_fuzzy   # shared with align_book_editaware's resync
 import wps_check
 
 def track_no(s):
@@ -25,7 +25,17 @@ def track_no(s):
     return m.group(1) if m else None
 
 
-def main():
+def _fuzzy_threshold(value):
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a finite number in (0, 1]") from exc
+    if not math.isfinite(parsed) or not 0.0 < parsed <= 1.0:
+        raise argparse.ArgumentTypeError("must be a finite number in (0, 1]")
+    return parsed
+
+
+def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", help="per-track output dir (alignNN.json); required for the ASR pass")
     ap.add_argument("--audio-glob", help="glob for the audiobook tracks (numbered NN - ...); required for the ASR pass")
@@ -36,6 +46,12 @@ def main():
                     help="a point PASSES if >= this fraction of the aligned-window words appear in the ASR")
     ap.add_argument("--max-fail-frac", type=float, default=0.4,
                     help="exit nonzero if more than this fraction of sampled points FAIL")
+    ap.add_argument("--fuzzy", action="store_true",
+                    help="NAME-TOLERANT overlap (fuzzy proper-noun matching) -- for proper-noun-dense books "
+                         "(TWI Vol-4/5) where wav2vec2 ASR mangles fantasy names and the exact metric "
+                         "false-flags correctly-aligned points. Distinguishes real drift from ASR name-noise.")
+    ap.add_argument("--fuzzy-thresh", type=_fuzzy_threshold, default=0.8,
+                    help="SequenceMatcher ratio (one-to-one words, both >=4 chars) to count a fuzzy match (with --fuzzy)")
     ap.add_argument("--wps-pre", action="store_true",
                     help="run the NO-GPU wps boundary pre-screen FIRST (before loading the ASR model); on any "
                          "outlier exit nonzero BEFORE the GPU pass -- fail fast, fail cheap, never burn GPU on a "
@@ -43,7 +59,11 @@ def main():
     ap.add_argument("--wps-only", action="store_true",
                     help="run ONLY the wps pre-screen and exit (no ASR/GPU) -- the cheap CI/pre-flight smoke test")
     wps_check.add_args(ap)         # --track-map/--text (Mode 1), --dir/--manifest/--units (Mode 2), --wps-tol/-abs, --allow-wps-outliers
-    a = ap.parse_args()
+    return ap
+
+
+def main(argv=None):
+    a = build_parser().parse_args(argv)
 
     # --- wps pre-screen: a NO-GPU CPU pass that runs BEFORE any torch import / model load. A wps outlier
     # is the wrong-boundary signature the sparse ASR gate is structurally blind to, so in the SHIP gate it
@@ -76,7 +96,9 @@ def main():
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     bundle = torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H
     model = bundle.get_model().to(dev).train(False); labels = bundle.get_labels(); sr = bundle.sample_rate
-    print(f"device {dev}; sampling tracks {tracks}; pass>= {a.min_overlap} overlap", flush=True)
+    score_fn = ((lambda al, he: overlap_score_fuzzy(al, he, a.fuzzy_thresh)) if a.fuzzy else overlap_score)
+    print(f"device {dev}; sampling tracks {tracks}; pass>= {a.min_overlap} overlap"
+          f"{' (FUZZY name-tolerant, thresh %.2f)' % a.fuzzy_thresh if a.fuzzy else ''}", flush=True)
 
     def asr(path, t0):
         info = sf.info(path); n = int(a.win * info.samplerate); start = int(t0 * info.samplerate)
@@ -114,7 +136,7 @@ def main():
             t0 = round(min(frac * dur, dur - a.win), 1)
             atext = aligned_window(segs, t0, t0 + a.win)
             heard = asr(ap_path, t0)
-            overlap = overlap_score(words_of(atext), words_of(heard))
+            overlap = score_fn(words_of(atext), words_of(heard))
             ok = overlap >= a.min_overlap
             total += 1; failed += 0 if ok else 1
             print(f"\n  t={t0/60:5.1f}min  overlap={overlap:.2f}  {'PASS' if ok else 'FLAG'}", flush=True)

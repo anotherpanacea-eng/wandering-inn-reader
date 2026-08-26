@@ -271,6 +271,16 @@ the data has it. Two ways to get word-level:
 - **`align.py --words-json`** — if some other aligner produced a flat word-timestamp
   list, `align.py` packs those words into their containing sentences by time.
 
+### Final alignment verification
+
+`pipeline/verify_tracks.py` is the ASR-vs-alignment ship gate. Its default remains
+exact asymmetric word overlap. For a manually identified proper-noun-dense book,
+`--fuzzy` enables a name-tolerant content-word comparison; it is deliberately
+off by default, requires one-to-one word matches, and leaves words shorter than
+four characters exact-only. `--fuzzy-thresh` accepts only a finite value in
+`(0, 1]` (default `0.8`). Keep `--wps-pre` enabled for the separate, cheap
+wrong-boundary screen; fuzzy spelling tolerance does not waive that gate.
+
 ---
 
 ## Can this sync with Audible?
