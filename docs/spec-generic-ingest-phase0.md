@@ -118,9 +118,10 @@ second selection supersedes the first by generation token; a superseded operatio
 not open or persist its result. The Load screen reports one concise progress state and
 one terminal error. It does not expose archive internals.
 
-On success, the path sets `doc`, sets mode to `"text"`, sets the source identity, then
-calls a text entry function which validates the projected document, calls the unchanged
-`build()`, shows the reader, restores position, and finally saves the last session.
+On conversion success, the path keeps the result local, validates the projected document,
+and rechecks its generation token. Only then does it commit `doc`, mode, and source
+identity, call the unchanged `build()`, show the reader, restore position, and attempt to
+save the last session in the ordering specified by sections 4.3 and 13.
 
 ### 4.2 Renderer seam
 
@@ -152,6 +153,31 @@ Text mode has no playable media. The implementation SHALL:
 The mode guards belong in transport, chapter navigation, and persistence entry points;
 they are not changes to `build()`.
 
+The following matrix is binding for the live functions/handlers. `mode` is checked at
+handler execution time, not only when the handler is installed, because an old audio
+event can arrive after a generic document opens.
+
+| Live seam | `mode === "text"` behavior |
+|---|---|
+| `posKey()` | Return the key derived from generic source identity; never use `doc.title`. |
+| `save()` / `restore()` | Store/read only `{seg}`. Never read/write `audio.currentTime`, and never wait for `loadedmetadata`. |
+| `flushSave()` plus `pagehide` / hidden `visibilitychange` | Call a forced position save which bypasses the 1,500 ms throttle (either `save(true)` or an equivalent dedicated function). |
+| `onTap()` / `seekTo()` | Segment taps do not call `seekTo`; text-mode code must not enter `seekTo()` or `audio.play()`. |
+| `renderChapters()` chapter buttons | Navigate directly to the target segment/page, set the reading anchor, and force-save it. |
+| `skipChapter()` and previous/next chapter buttons | Navigate to the adjacent chapter segment without reading or changing audio state. |
+| document `keydown` handler | Space and unshifted Left/Right do nothing; PageUp/PageDown still turn pages; Shift+Left/Right use text-mode chapter navigation. |
+| `setupMediaSession()`, `updateMetadata()`, `updatePosition()` | Do not install/update a Media Session for the generic document. Stale handlers are cleared or made inert. |
+| audio `play`, `pause`, `seeked`, `loadedmetadata`, `error`, and `ended` handlers | Return before mutating generic reader, position, chapter, toast, or session state. |
+| `renderSettings()` and transport controls | Keep Reading mode and Text size; hide/disable Keep screen on, sleep, play, rate, seek, ±15, and Follow. |
+
+Generic restore ordering is exact: after conversion and `validateDoc` succeed, recheck
+the generation token; set `doc`, mode, identity, and the initial text state; call the
+unchanged `build()`; show the reader; build visible paged geometry if needed; read and
+clamp the stored `{seg}`; navigate without animation to that segment/page; set the
+reading/chapter anchors; only then permit position and last-session writes. No initial
+`setSeg(0)`, audio event, or throttled save may overwrite the saved segment before this
+restore completes.
+
 ### 4.4 Contract validation seam
 
 Every successful conversion SHALL pass the existing `validateDoc(doc, source)` before
@@ -179,9 +205,11 @@ The common projector SHALL:
 1. normalize and trim each block's text as its adapter specifies;
 2. discard blank blocks;
 3. enforce the post-normalization limits in section 6;
-4. remove a heading block when it is solely the visible label for a chapter candidate
-   mapped to that same block, then remap the chapter to the next surviving block in the
-   same resource (this prevents duplicate chapter labels);
+4. remove a heading block only when it is solely the visible label for a chapter candidate
+   mapped to that same block **and** a next surviving block exists in the same resource;
+   remap that chapter to the next block (this prevents duplicate labels without content
+   loss). If no next block exists, retain the heading as prose and discard that chapter
+   candidate with a warning;
 5. assign contiguous segment IDs and logical coordinates;
 6. resolve chapter candidates to surviving segment indexes;
 7. discard unresolved chapter candidates with a warning;
@@ -196,7 +224,11 @@ handling has separate normalization rules because those strings are identifiers.
 
 ## 6. Resource ceilings and atomic failure
 
-The following Phase 0 constants are part of the contract, not tuning suggestions:
+The following are deliberately conservative Phase 0 ceilings for a single-tab,
+dependency-free browser importer. They are not EPUB validity limits and may be revised by
+a later measured spec. They bound peak per-resource allocation, decompression work, final
+DOM scale, and accidental archive expansion while leaving ample room for the stripped
+prose books this phase is intended to prove:
 
 | Limit | Value |
 |---|---:|
@@ -215,6 +247,12 @@ The following Phase 0 constants are part of the contract, not tuning suggestions
 MiB means 1,048,576 bytes. Limits are checked with overflow-safe arithmetic. Declared
 ZIP sizes are checked before decompression; actual streamed output is checked during and
 after decompression. A false or absent declaration never disables an actual-output limit.
+The total declared size is accumulated as integers only; the importer never reserves or
+allocates a buffer of that total size. It decompresses only `mimetype`, container, chosen
+OPF, nav, and included linear-spine resources. Unreferenced entries receive structural,
+path, flag, range, declared-size, and ratio validation but are never decompressed merely
+to prove their CRC. The actual-total ceiling is accumulated over referenced resources as
+they stream.
 
 Import is transactional at the application level: parsing and validation occur in local
 variables. Until a complete projected document passes `validateDoc`, the implementation
@@ -273,15 +311,48 @@ one list item or blockquote become one respective block. Code content is retaine
 `code` block with line boundaries converted to a single space; fence delimiters and an
 optional fence info string are omitted.
 
-The adapter performs only these inline readability transformations:
+Inline projection for every non-code block uses one nonrecursive, left-to-right scanner.
+Consumed input is appended to an output buffer and is never rescanned. At each position,
+try these productions in order; if none matches, copy one Unicode code point literally:
 
-- `` `code` `` loses one matching delimiter pair;
-- `[label](destination)` and `[label][reference]` retain `label` and discard the target;
-- `![alt](destination)` retains `alt` and discards the target;
-- one matching pair of `*`, `_`, `**`, `__`, or `~~` around nonblank text is removed;
-- a backslash before an ASCII Markdown punctuation character removes the backslash.
+1. **Escape:** `\` followed by exactly one ASCII character from
+   ``!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~`` emits that character. A terminal backslash or a
+   backslash before any other character remains literal.
+2. **Code span:** one backtick, one or more characters other than backtick or line break,
+   then one backtick emits the interior. A backtick adjacent to another backtick is not a
+   delimiter in Phase 0.
+3. **Inline image, reference image, inline link, reference link**, in that order, using
+   the exact grammar below. Emit only the label/alt bytes. If the current position starts
+   with `![` or `[`, but none of those four productions matches, append the remainder of
+   that block literally and stop scanning it. This makes nested/unmatched brackets and
+   unsupported destinations literal rather than partially reinterpreting a suffix.
+4. **Strong, strike, emphasis**, trying `**`, `__`, `~~`, `*`, `_` in that order. An
+   opener/closer is a maximal run of exactly that token's character and length; a run of
+   any other length is copied as a whole and cannot be reconsidered from its second code
+   point. Use the first later eligible matching run as the closer. A pair matches only
+   when its interior is nonblank, begins and ends with a non-whitespace code point, and
+   contains none of ``\`*~_![]`` or a line break. Emit the interior.
 
-Unmatched or unsupported Markdown syntax remains literal text. Raw HTML is never parsed
+The link/image grammar is deliberately smaller than CommonMark:
+
+```text
+LABEL = 1*( any code point except "[", "]", "\\", or line break )
+DEST  = *( any code point except whitespace, control, "(", ")", or "\\" )
+REF   = LABEL
+inline-link     = "[" LABEL "](" DEST ")"
+reference-link  = "[" LABEL "][" REF "]"
+inline-image    = "![" LABEL "](" DEST ")"
+reference-image = "![" LABEL "][" REF "]"
+```
+
+`DEST` may be empty; `LABEL` and `REF` may not. Nesting, escaped characters inside these
+productions, balanced/nested parentheses, shortcut/collapsed references, multiline forms,
+and recursive inline interpretation are unsupported and therefore copied literally. For
+example, an emphasis marker emitted from inside a link label is not processed again.
+Code blocks bypass this scanner entirely.
+
+Unmatched, partially matched, overlapping, or unsupported Markdown syntax remains
+literal text. Raw HTML is never parsed
 or inserted: `<script>alert(1)</script>` is displayed as inert literal text. Link and
 image destinations are never fetched. YAML front matter, tables, task-list semantics,
 footnotes, definitions, autolinks, embedded HTML, and CommonMark edge-case parity are not
@@ -324,20 +395,37 @@ must not scan local-file signatures and hope they are entries.
   to match its central record. Reject ZIP64 extra-field IDs even when the corresponding
   32-bit field is not a ZIP64 sentinel.
 - The central-directory compressed size, uncompressed size, CRC-32, flags, and method are
-  authoritative. General-purpose bit 3/data descriptors are allowed because the central
-  record provides sizes; the descriptor itself is not trusted or parsed as content.
-- Reject encrypted entries (general-purpose bit 0), unsupported flags which change data
-  interpretation, and methods other than 0 (stored) and 8 (deflate).
+  authoritative. The only permitted general-purpose flag bits are `0x0808` (bits 3 and
+  11) for method 0 and `0x080e` (bits 1, 2, 3, and 11) for method 8; in both cases the
+  actual flags must be a subset of that mask. Any non-ASCII filename requires bit 11;
+  ASCII filenames may set or clear it. Thus encryption, patched/strong encryption,
+  enhanced deflate, and every other interpretation-changing flag fail closed.
+- When bit 3 is clear, local CRC-32 and sizes must equal the central values. When bit 3 is
+  set, parse exactly one descriptor immediately after compressed data: either 12 bytes
+  (`crc32`, `compressed-size`, `uncompressed-size`) or the same fields preceded by the
+  four-byte `0x08074b50` signature. Its fields must equal the central values. ZIP64
+  descriptors are rejected. With bit 3 set, the three local-header fields must be either
+  all zero or all equal to the central values; mixed or different values are rejected.
 - For method 0, compressed and uncompressed sizes must match.
 - For method 8, feed only that entry's compressed byte range to raw-deflate and consume
   output with a bounded stream reader. Do not use an unbounded `Response(...).arrayBuffer()`.
 - Actual output length must equal the central-directory uncompressed size.
-- Compute CRC-32 over actual uncompressed bytes and require it to equal the central value.
+- For every referenced entry that is decompressed, compute CRC-32 over actual uncompressed
+  bytes and require it to equal the central value.
 - Any mismatch is a hard error.
 
-The OCF `mimetype` file must be the first local entry, use method 0, have no extra field,
-and contain exactly the ASCII bytes `application/epub+zip`. Directory entries may appear
-elsewhere and are ignored after path validation.
+Sort local records by local-header offset. Each record interval begins at its local header
+and ends after its filename, extra field, compressed data, and required descriptor. The
+first interval begins at byte 0; each interval ends exactly where the next begins, and the
+last ends at the central-directory offset. Intervals may not overlap one another or the
+central directory, and unexplained gaps are rejected. A descriptor signature occurring
+inside compressed data has no special meaning because the data end comes from the central
+size.
+
+The OCF `mimetype` record must have its local header at byte 0 (this is the meaning of
+“first local entry”), have the exact filename `mimetype`, use method 0, clear bit 3, have
+no local extra field, and contain exactly the ASCII bytes `application/epub+zip`.
+Directory entries may appear later and are ignored after structural/path validation.
 
 ### 9.3 Archive path canonicalization
 
@@ -360,31 +448,68 @@ prevents a package with a benign spine and a malicious hidden entry from being a
 
 ### 10.1 Safe XML parsing
 
-Before `DOMParser(..., "application/xml")`, each XML/XHTML resource must pass its byte
-limit and strict encoding decode. XML declarations may select UTF-8 or a BOM-signaled
-UTF-16 form supported by section 7; conflicting declarations/BOMs are a hard error.
+Namespace identity is exact:
 
-An internal DTD subset, `SYSTEM` identifier, or `PUBLIC` identifier is rejected before
-parsing. The exact case-insensitive HTML5 declaration `<!DOCTYPE html>` is allowed in
-XHTML. A parser error node or a document without the expected root local-name is a hard
-error. Selection uses namespace URI plus `localName`, not prefix spelling.
+| Vocabulary | Namespace URI |
+|---|---|
+| OCF container | `urn:oasis:names:tc:opendocument:xmlns:container` |
+| OPF package | `http://www.idpf.org/2007/opf` |
+| XHTML | `http://www.w3.org/1999/xhtml` |
+| Dublin Core elements | `http://purl.org/dc/elements/1.1/` |
+| EPUB attributes | `http://www.idpf.org/2007/ops` |
+| XML attributes (`xml:id`, `xml:base`) | `http://www.w3.org/XML/1998/namespace` |
+
+Prefix spellings never establish identity. Before `DOMParser(..., "application/xml")`,
+each resource passes its byte limit and this decoder:
+
+1. UTF-8 BOM selects fatal UTF-8; UTF-16LE/BE BOM selects the matching fatal decoder;
+   without a BOM, fatal UTF-8 is the only choice. Remove the BOM.
+2. If an XML declaration is present, it must start at the first decoded code point and be
+   syntactically accepted by the XML parser. The pre-parser's quote-aware lexical scanner,
+   not a regular expression, extracts at most one case-sensitive `encoding` pseudo-
+   attribute from the declaration; duplicate attributes or an unterminated declaration
+   are hard errors. Normalize only the encoding value's ASCII case. UTF-8 bytes may
+   declare only `UTF-8`; UTF-16LE bytes may declare `UTF-16` or `UTF-16LE`; UTF-16BE bytes
+   may declare `UTF-16` or `UTF-16BE`. An absent encoding declaration is allowed. Any
+   other label, a UTF-16 declaration without a BOM, or any BOM/declaration conflict is a
+   hard error.
+3. A decoded U+0000 is a hard error.
+
+DOCTYPE handling uses a lexical state machine over decoded code points before DOMParser,
+not a regular expression. The scanner consumes ordinary markup, processing instructions,
+quoted attribute values, XML comments (`<!--` through the first legal `-->`), and CDATA
+sections (`<![CDATA[` through `]]>`), rejecting an unterminated or lexically invalid
+construct. A `DOCTYPE` token is recognized ASCII-case-insensitively only after the exact
+markup opener `<!` and outside comments, CDATA, processing instructions, and quotes.
+Container and OPF documents permit no DOCTYPE. XHTML permits exactly the token sequence
+`<!`, `DOCTYPE`, one-or-more XML whitespace characters, `html`, optional XML whitespace,
+`>`; `DOCTYPE` and `html` are ASCII-case-insensitive. Any extra token, quote, internal
+subset, `SYSTEM`/`PUBLIC` identifier, or second declaration is rejected. This scanner
+cannot make content hidden in a comment or CDATA active; DOMParser remains the final
+well-formedness check.
+
+A parser error node or a document without the expected namespace URI plus root
+`localName` is a hard error.
 
 No parsed node is adopted into the application DOM. The importer reads attributes and
 text into plain strings only.
 
 ### 10.2 `container.xml`
 
-The package must contain `META-INF/container.xml`. From its `rootfiles`, choose the first
-in document order whose `media-type` is `application/oebps-package+xml`. Its `full-path`
-is resolved using section 10.3 and must name a present non-directory entry. No supported
-rootfile is a hard error.
+The package must contain `META-INF/container.xml` whose root is OCF `container`. From its
+OCF `rootfiles/rootfile` elements, choose the first in document order whose `media-type`
+is `application/oebps-package+xml`. Its `full-path` is resolved using section 10.3 and
+must name a present non-directory entry. No supported rootfile is a hard error.
 
 ### 10.3 Package-relative hrefs
 
 Every OPF/nav href used for lookup is resolved relative to its containing resource:
 
-1. split a single optional `#fragment`; queries are rejected;
-2. reject a scheme, authority, absolute path, backslash, NUL, or empty required path;
+1. count literal `#` characters; more than one is a hard error. Split the single optional
+   delimiter. An empty path is allowed only when a nonempty fragment is present and then
+   resolves to the containing resource; an empty fragment is rejected. Queries are
+   rejected;
+2. reject a scheme, authority, absolute path, backslash, NUL, or any other empty path;
 3. percent-decode each path component as strict UTF-8;
 4. reject percent-encoded `/`, `\`, or NUL before decoding;
 5. normalize path components and reject traversal above archive root;
@@ -397,7 +522,9 @@ causes a hard error rather than ambiguous resolution.
 
 ### 10.4 OPF manifest and metadata
 
-The package root must be `package`. The importer SHALL:
+The package root must be OPF `package`. Its trimmed `version` is accepted only if it is
+the single ASCII digit `3`, or `3`, `.`, and one or more ASCII decimal digits with no
+other characters; this requires OPF major version 3. The importer SHALL:
 
 - require unique, nonblank manifest `id` values;
 - require every manifest `href` to resolve to one unique archive file;
@@ -431,8 +558,9 @@ order. OPF linear spine order is authoritative.
 
 ## 11. EPUB XHTML text extraction
 
-For each included spine resource, parse XHTML as safe XML and require an XHTML `html`
-root and `body`. Remove from consideration `head`, `script`, `style`, `noscript`,
+For each included spine resource, parse XHTML as safe XML and require an XHTML-namespace
+`html` root and XHTML `body`. Remove from consideration XHTML `head`, `script`, `style`,
+`noscript`,
 `template`, `audio`, `video`, `canvas`, `svg`, `math`, `object`, `embed`, and form-control
 subtrees. Images and CSS are not loaded; an image's `alt` text is not prose in Phase 0.
 
@@ -449,9 +577,11 @@ block at its document position. `<br>` contributes one space. HTML/XML whitespac
 including nonbreaking space, collapses to one ASCII space; trim the result. A nonblank
 heading is a `heading` block; the other named types map to the common kinds in section 5.
 
-Record every nonblank `id` or `xml:id` on the candidate block or one of its descendants.
-An anchor maps to the containing emitted block; an anchor between blocks maps to the next
-emitted block in that resource. Duplicate normalized IDs in one resource are a hard
+Record every nonblank unqualified `id` or XML-namespace `xml:id` on the candidate block or
+one of its descendants. If both attributes on one element normalize to the same value,
+they are one alias; if they differ, they create two anchors. An anchor maps to the
+containing emitted block; an anchor between blocks maps to the next emitted block in that
+resource. Reuse of a normalized anchor by any different element in the resource is a hard
 error. An anchor with no following block is unresolved.
 
 The extraction is text-only. CSS display state, generated content, ruby positioning,
@@ -461,8 +591,9 @@ to execute stylesheet or script content.
 
 ## 12. EPUB nav TOC and chapter mapping
 
-In the manifest item marked `nav`, find the first XHTML `nav` whose EPUB namespace
-`type` attribute contains the whitespace token `toc`. No such element is a hard error;
+In the manifest item marked `nav`, find the first XHTML-namespace `nav` whose exact EPUB-
+namespace `type` attribute contains the whitespace token `toc`. No such element is a hard
+error;
 EPUB 2 NCX fallback is out of scope.
 
 Walk its descendant ordered-list/list-item structure in document order. Each list item
@@ -478,9 +609,8 @@ Resolve a candidate href as follows:
 - A fragment maps through the anchor table in section 11.
 - A missing/unresolved fragment is ignored with a warning.
 
-The common projector removes a target heading when it would duplicate the same visible
-chapter label, maps the chapter to the next surviving block in the resource, deduplicates
-same-segment candidates, and emits the final flat chapter array.
+The common projector applies the content-preserving heading rule in section 5, then
+deduplicates same-segment candidates and emits the final flat chapter array.
 
 A valid EPUB nav may yield no usable chapter candidates after skipping auxiliary or
 broken links. That is a soft condition: reading follows spine order with no chapter
@@ -522,6 +652,25 @@ The Resume button opens a saved generic document immediately. It must not ask fo
 audio file. Existing audio records without the new mode field retain their current
 reselect-audio fallback, so no destructive IndexedDB migration is required.
 
+Commit and failure ordering is exact:
+
+1. Allocate a monotonically increasing generation token on file selection and recheck it
+   after every awaited read, digest, decompression, parse stage, and immediately before
+   visible commit. A stale generation exits without touching doc, UI, position, or session.
+2. Only a current, fully validated result performs the synchronous doc/mode/identity,
+   `build()`, visible-layout, and ordered restore commit defined in section 4.3.
+3. After visible restore, enqueue the `session/last` replacement on one serialized write
+   queue. Recheck the token immediately before opening/using its read-write transaction.
+   Queue order ensures a newer committed import's write is last even if an older write was
+   already in flight.
+4. Use one IndexedDB `put` transaction and never delete the old record first. Transaction
+   abort, quota exhaustion, unavailable IndexedDB, or write error leaves the previous
+   `session/last` record intact. The newly opened book remains readable, but the UI emits
+   a warning that resume was **not saved**; it must not show a successful-resume claim.
+5. A position write is enabled only after the current generation's restore completes and
+   uses the new identity key. A failed/stale import never writes either its prospective
+   key or the prior book's key.
+
 ## 14. Errors and warnings
 
 Hard errors abort the import. They include:
@@ -556,8 +705,11 @@ a security, bounds, ordering, or contract failure.
 
 The implementation is complete only if all of these hold:
 
-- **Local-only:** generic import performs zero `fetch`, XHR, navigation, dynamic script,
-  external stylesheet, font, media, or image requests.
+- **Local-only:** from the generic input's change event through its commit/error and the
+  next animation frame, work causally initiated by that import performs zero `fetch`,
+  XHR, beacon, navigation, window-open, dynamic script, external stylesheet, font, media,
+  image, or other URL-backed resource request. Existing Dropbox code is outside this
+  assertion when idle and not invoked by the import; Phase 0 does not remove it.
 - **No active markup:** XHTML and Markdown become strings; only the existing `el()` and
   `textContent` DOM path renders them. No imported string reaches `innerHTML`, `src`,
   `href`, CSS, an event-handler attribute, or executable URL.
@@ -588,6 +740,10 @@ are crafted headers or generated in temporary test storage, not committed payloa
 2. UTF-8-BOM TXT and UTF-16LE/BE micro-text.
 3. Markdown containing ATX and Setext headings, paragraph wrapping, list, quote, fenced
    code, link/image labels, inline markers, raw HTML text, and unsupported literal syntax.
+   Its table-driven cases include nested/unmatched brackets, escaped delimiters, adjacent
+   and overlapping delimiter runs, nested parentheses, empty destinations, terminal
+   backslash, markers inside code, and link labels containing markers; each case asserts
+   the exact literal-or-transformed output from section 8.
 4. Stored EPUB with exact mimetype, nested OPF directory, two linear XHTML resources,
    heading targets, nested nav TOC, percent-encoded Unicode href/fragment, one
    `linear="no"` resource, and active/remote-looking content which must remain inert.
@@ -600,22 +756,31 @@ inspect. Expected JSON uses the exact logical-coordinate and chapter rules here.
 
 - invalid UTF-8, unsupported BOM, interior NUL, and whitespace-only text;
 - missing/false EOCD, EOCD count/range mismatch, trailing data, multi-disk, ZIP64,
-  encrypted entry, unsupported method, data range outside source, stored-size mismatch,
-  CRC mismatch, and truncated deflate;
+  every forbidden flag bit, invalid method-specific flag combination, missing/extra/bad
+  descriptor, local/central disagreement, local-record gap/overlap, encrypted entry,
+  unsupported method, data range outside source, stored-size mismatch, CRC mismatch, and
+  truncated deflate;
 - `../`, absolute, backslash, encoded-separator href, root escape, invalid UTF-8 name,
   duplicate canonical name, and file/directory collision;
 - declared oversize entry, declared total oversize, high compression ratio, and a stream
   whose actual output exceeds its declaration/limit;
 - missing or misplaced/compressed/wrong `mimetype`, missing container/rootfile/OPF/nav,
-  malformed XML, dangerous DTD, invalid `xml:base`, duplicate manifest ID/resource,
+  wrong namespace, non-3 OPF version, BOM/declaration conflict, unsupported encoding,
+  malformed XML, DOCTYPE hidden-case/comment/CDATA boundary cases, dangerous DTD, invalid
+  `xml:base`, duplicate manifest ID/resource,
   missing/duplicate spine IDREF, unsupported linear media, fixed layout, missing body,
-  duplicate anchor ID, broken fragment, and spine yielding no prose.
+  same-element ID alias, cross-element duplicate anchor ID, empty-path fragment, multiple
+  `#`, broken fragment, terminal heading with no following prose, and spine yielding no prose.
 
 ### 16.3 Automated behavioral tests
 
-Add a no-dependency Node test under `tests/` and wire it into `check.sh` when Node is
-available, following the existing `test_paged_anchor.mjs` convention of exercising the
-shipped implementation from `index.html`, not a copied algorithm. The implementation
+Add a no-dependency Node test at `tests/test_generic_ingest.mjs`. On every implementation
+head, `./check.sh` SHALL require `node` and unconditionally run
+`node --test tests/test_generic_ingest.mjs`; missing Node, any skipped generic-ingest case,
+or any failure makes the gate fail. Existing unrelated checks may retain their current
+optional-Node behavior on pre-implementation/Python-only heads. Follow the existing
+`test_paged_anchor.mjs` convention of exercising the shipped implementation from
+`index.html`, not a copied algorithm. The implementation
 SHALL factor byte parsing, decoding, Markdown projection, path resolution, semantic
 assembly, common projection, and position-key logic into pure functions that the test
 can extract/import or call with explicit adapters.
@@ -628,17 +793,24 @@ Automated tests SHALL assert:
 - all negative cases fail with the expected stable error category;
 - decompression stops at actual-output ceilings;
 - superseded/failed imports do not invoke the commit/open callback;
+- heading removal never drops a terminal heading; href/anchor alias cases follow sections
+  10.3 and 11 exactly;
 - same bytes produce the same stable identity and distinct bytes do not share the tested
   identity;
 - final docs pass a JavaScript contract validation; and
-- generic position restore is segment-based and title collisions do not collide.
+- generic position restore is segment-based and title collisions do not collide;
+- every text-mode seam in the section 4.3 matrix avoids audio state, and lifecycle flush
+  persists the latest segment even inside the 1,500 ms throttle window; and
+- stale-generation and simulated IndexedDB quota/write failures preserve the prior
+  session, order newer commits last, and surface “not saved” rather than success.
 
 Node does not provide a portable browser `DOMParser`. To avoid pretending a parser stub
 tests browser XML behavior, split XML handling into (a) a thin DOM-to-plain-model adapter
 and (b) pure semantic assembly. Node tests cover (b) exhaustively. An in-browser fixture
-harness covers (a) and the end-to-end path below. If the Node runtime lacks raw-deflate
-`DecompressionStream`, the deflate case reports an explicit skip while stored ZIP and all
-limit/header tests still run; the real-browser check must exercise deflate.
+harness covers (a) and the end-to-end path below. Raw-deflate decoding is mandatory in the
+Mac Node command and in the real-browser harness; lack of `deflate-raw` support is a failed
+implementation environment, not a skip. The shipped browser runtime still gives end users
+the fail-closed capability message in section 9.1.
 
 Static source-presence assertions are not substitutes for behavioral tests. A test must
 fail when the relevant runtime result or security outcome is wrong.
@@ -655,8 +827,10 @@ The check SHALL demonstrate, by observable behavior:
 
 1. load the deflated EPUB from the normal Load control;
 2. confirm its title, TOC-derived chapter headers, spine order, and expected prose;
-3. confirm a link/script/image in source causes no navigation, execution, or network
-   request;
+3. with Dropbox idle, instrument `fetch`, XHR open/send, `sendBeacon`, window/navigation
+   entry points, URL-bearing DOM mutations, and new resource-timing entries from input
+   change through commit plus the next animation frame; confirm a link/script/image in
+   source causes no import-attributable navigation, execution, or resource request;
 4. switch Scroll/Pages, turn multiple pages, and change font size;
 5. navigate from the chapter sheet without starting audio;
 6. move to a later page, reload, choose Resume, and return to that page without selecting
@@ -710,3 +884,21 @@ Implementation review should attack the boundary rather than confirm it: mutate 
 claim, CRC, path, href, fragment, spine order, nav target, import generation, same-title
 identity, and text-mode transport guard and verify the corresponding behavioral test or
 acceptance check fails.
+
+## 19. Six-lens review-driven changes
+
+- **Contract/determinism:** froze a nonrecursive Markdown scanner and preserved terminal
+  heading content instead of removing it without a valid remap target.
+- **Standards/compatibility:** fixed all OCF/OPF/XHTML/DC/EPUB/XML namespace identities,
+  OPF major version, BOM/declaration consistency, lexical DOCTYPE handling, and exact
+  empty-path/fragment/anchor-alias rules.
+- **Security/adversarial:** fixed method-specific ZIP flags, descriptor and local-record
+  ranges, byte-zero `mimetype`, conservative resource ceilings, referenced-only bounded
+  decompression, and the import-scoped zero-network assertion.
+- **Live integration:** added guards for every current audio/navigation/settings handler,
+  a throttle-bypassing lifecycle flush, and restore ordering independent of audio metadata.
+- **Persistence/failure:** specified generation checks, serialized last-session writes,
+  atomic IndexedDB replacement, quota/write warnings, and preservation of the old session.
+- **Verification/build readiness:** made the generic-ingest Node suite and raw-deflate case
+  mandatory on implementation heads, retained a real-browser deflate/network harness, and
+  added adversarial fixtures for each repaired boundary.
