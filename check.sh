@@ -43,4 +43,13 @@ else
   echo "→ paged-anchor regression test SKIPPED (node not found)"
 fi
 
+# Phase-0 generic ingest is a browser JavaScript/security boundary. Unlike the legacy
+# optional player check above, implementation heads require Node and may not skip it.
+if ! command -v node >/dev/null 2>&1; then
+  echo "✗ generic-ingest behavioral gate requires node" >&2
+  exit 1
+fi
+echo "→ generic-ingest behavioral/security test (mandatory, no skips)"
+node --test tests/test_generic_ingest.mjs
+
 echo "✓ all local checks passed"
