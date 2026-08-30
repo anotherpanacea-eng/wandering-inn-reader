@@ -192,7 +192,7 @@
   let segPage=[], pageW=0, colPad=0, relayoutT=0, pgFollowWord=-1;   // paged geometry: segPage[i]=start column; pageW=px/page; pgFollowWord=last word the page followed
   let lastUserInput=0, scrollT=0, pendingReadSeg=-1, pausedAt=0;
   let playlist=null, pendingSeek=0, pendingAutoplay=false;   // continuous multi-track book
-  let mode="audio", sourceIdentity="", currentFormat="", positionReady=true, genericGeneration=0;
+  let mode="audio", sourceIdentity="", currentFormat="", positionReady=true, loadEpoch=0;
   let sessionWriteQueue=Promise.resolve();
 
   const fmt = t => { t=Math.max(0,t|0); const m=(t/60)|0, s=t%60; return m+":"+(s<10?"0":"")+s; };
@@ -393,7 +393,7 @@
   function selectOpfPath(model,hasEntry){const rf=(model.rootfiles||[]).find(r=>r.mediaType==="application/oebps-package+xml");if(!rf)giFail("EPUB_CONTAINER","no OPF rootfile");if(!rf.fullPath.trim())giFail("EPUB_CONTAINER","blank OPF rootfile");const r=resolveHref("root",rf.fullPath);if(r.fragment)giFail("EPUB_CONTAINER","rootfile fragment unsupported");if(!hasEntry(r.path))giFail("EPUB_RESOURCE","missing "+r.path);return r.path;}
   function assembleOpfModel(model,op,name,hasEntry){const ver=(model.version||"").trim();if(!(ver==="3"||(/^3\.\d+$/.test(ver))))giFail("EPUB_VERSION","EPUB 3 required");if((model.metas||[]).some(m=>(m.property||"").trim()==="rendition:layout"&&collapseText(m.text||"")==="pre-paginated"))giFail("EPUB_SPINE","fixed-layout package unsupported");const manifest=new Map(),resources=new Set();let nav=null;for(const it of model.items||[]){const id=it.id,href=it.href,media=it.media,props=(it.properties||"").trim().split(/\s+/).filter(Boolean);if(!id||!id.trim()||manifest.has(id))giFail("EPUB_MANIFEST","duplicate or blank manifest id");if(!href||!href.trim())giFail("EPUB_MANIFEST","blank manifest href");if(it.fallback)giFail("EPUB_FALLBACK","fallback unsupported");if(props.includes("scripted"))giFail("EPUB_MANIFEST","scripted resource unsupported");const r=resolveHref(op,href);if(r.fragment)giFail("EPUB_MANIFEST","manifest fragment unsupported");if(!hasEntry(r.path))giFail("EPUB_RESOURCE","missing "+r.path);if(resources.has(r.path))giFail("EPUB_MANIFEST","duplicate resource");resources.add(r.path);const m={id,path:r.path,media,props};manifest.set(id,m);if(props.includes("nav")){if(nav)giFail("EPUB_NAV","multiple nav items");nav=m;}}
     if(!nav||nav.media!=="application/xhtml+xml")giFail("EPUB_NAV","missing EPUB 3 nav");const spine=[],seen=new Set(),warnings=[];for(const ir of model.spine||[]){const id=ir.idref,m=manifest.get(id);if(!m)giFail("EPUB_SPINE","missing idref");if(seen.has(id))giFail("EPUB_SPINE","duplicate idref");seen.add(id);if(ir.linear.trim()==="no"){warnings.push("skipped non-linear spine item");continue;}if(m.media!=="application/xhtml+xml"||m.props.includes("rendition:layout-pre-paginated")||m.props.includes("scripted"))giFail("EPUB_SPINE","unsupported spine item");spine.push(m);}if(!spine.length)giFail("EPUB_SPINE","empty linear spine");return {title:(model.titles||[]).map(collapseText).find(Boolean)||genericTitle(name,"epub"),nav,spine,warnings};}
-  function assembleEpubBook(pkg,resourceModels,navModel){const blocks=[],byPath=new Map(),warnings=pkg.warnings.slice();for(const m of pkg.spine){const ex=resourceModels.get(m.path);if(!ex)giFail("EPUB_RESOURCE","missing parsed "+m.path);const base=blocks.length;for(const b of ex.blocks||[])blocks.push(Object.assign({},b,{resourcePath:m.path}));const anchors=new Map();for(const a of ex.anchors||[])anchors.set(a.id,a.blockIndex<0?-1:base+a.blockIndex);byPath.set(m.path,{first:(ex.blocks||[]).length?base:-1,anchors});}if(!blocks.length)giFail("EMPTY","spine contains no prose");if(!navModel||navModel.toc!==true)giFail("EPUB_NAV","missing TOC nav");const chapterCandidates=[];for(const c of navModel.candidates||[]){const href=c.href,label=collapseText(c.label||"");if(!label||!href)continue;if(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)||href.startsWith("//")){warnings.push("ignored external TOC link");continue;}const r=resolveHref(pkg.nav.path,href),target=byPath.get(r.path);if(!target){warnings.push("ignored non-linear TOC link");continue;}const bi=r.fragment==null?target.first:target.anchors.get(r.fragment);if(bi==null||bi<0){warnings.push("ignored unresolved TOC link");continue;}chapterCandidates.push({title:label,resourcePath:r.path,blockIndex:bi});}if(!chapterCandidates.length)warnings.push("navigation has no usable chapters");return {title:pkg.title,blocks,chapterCandidates,warnings};}
+  function assembleEpubBook(pkg,resourceModels,navModel){const blocks=[],byPath=new Map(),warnings=pkg.warnings.slice();for(const m of pkg.spine){const ex=resourceModels.get(m.path);if(!ex)giFail("EPUB_RESOURCE","missing parsed "+m.path);const base=blocks.length;for(const b of ex.blocks||[])blocks.push(Object.assign({},b,{resourcePath:m.path}));const anchors=new Map();for(const a of ex.anchors||[]){if(anchors.has(a.id))giFail("ANCHOR","duplicate anchor");anchors.set(a.id,a.blockIndex<0?-1:base+a.blockIndex);}byPath.set(m.path,{first:(ex.blocks||[]).length?base:-1,anchors});}if(!blocks.length)giFail("EMPTY","spine contains no prose");if(!navModel||navModel.toc!==true)giFail("EPUB_NAV","missing TOC nav");const chapterCandidates=[];for(const c of navModel.candidates||[]){const href=c.href,label=collapseText(c.label||"");if(!label||!href)continue;if(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)||href.startsWith("//")){warnings.push("ignored external TOC link");continue;}const r=resolveHref(pkg.nav.path,href),target=byPath.get(r.path);if(!target){warnings.push("ignored non-linear TOC link");continue;}const bi=r.fragment==null?target.first:target.anchors.get(r.fragment);if(bi==null||bi<0){warnings.push("ignored unresolved TOC link");continue;}chapterCandidates.push({title:label,resourcePath:r.path,blockIndex:bi});}if(!chapterCandidates.length)warnings.push("navigation has no usable chapters");return {title:pkg.title,blocks,chapterCandidates,warnings};}
   async function epubBook(input,name,checkCurrent){const zip=parseZip(input),actual={n:0},cache=new Map(),hasEntry=path=>{const z=zip.names.get(path);return !!z&&!z.dir;},get=async(path)=>{giCurrent(checkCurrent);const z=zip.names.get(path);if(!z||z.dir)giFail("EPUB_RESOURCE","missing "+path);if(!cache.has(path))cache.set(path,readZipEntry(zip,z,actual,checkCurrent));try{const out=await cache.get(path);giCurrent(checkCurrent);return out;}catch(e){cache.delete(path);throw e;}};
     const cx=parseXmlBytes(await get("META-INF/container.xml"),"container");giCurrent(checkCurrent);const op=selectOpfPath(containerDomModel(cx),hasEntry),ox=parseXmlBytes(await get(op),"opf");giCurrent(checkCurrent);const pkg=assembleOpfModel(opfDomModel(ox),op,name,hasEntry),resources=new Map();for(const m of pkg.spine){const x=parseXmlBytes(await get(m.path),"xhtml");giCurrent(checkCurrent);rejectXmlBase(x);resources.set(m.path,epubTextBlocks(x,m.path));}const nx=parseXmlBytes(await get(pkg.nav.path),"xhtml");giCurrent(checkCurrent);const book=assembleEpubBook(pkg,resources,navDomModel(nx));giCurrent(checkCurrent);return book;}
   async function genericDocFromBytes(input,name,checkCurrent){const b=asBytes(input);if(b.length>GI_LIMIT.file)giFail("LIMIT","selected file is too large");giCurrent(checkCurrent);const f=genericFormat(name);if(!f)giFail("FORMAT","unsupported file extension");const book=f==="txt"?txtBook(b,name):f==="md"?markdownBook(b,name):await epubBook(b,name,checkCurrent);giCurrent(checkCurrent);return {format:f,doc:projectGeneric(book),warnings:book.warnings||[]}; }
@@ -775,7 +775,7 @@
       audioName:(pendingAudioFile?pendingAudioFile.name:""), savedAt:Date.now() };
     const full = pendingAudioFile ? Object.assign({audioBlob:pendingAudioFile}, base) : base;
     sessionWriteQueue=sessionWriteQueue.then(()=>{
-      if(writeMode==="text"&&token!==genericGeneration)return;
+      if(writeMode==="text"&&token!==loadEpoch)return;
       return idbSet("last",full).catch(e=>{if(writeMode==="audio"&&hasAudio)return idbSet("last",base);throw e;});
     }).catch(()=>{toast("Opened, but resume was not saved");});
     return sessionWriteQueue;
@@ -787,9 +787,9 @@
       btn.style.display="flex";
       btn.onclick=()=>{
         if(rec.mode==="text"){
-          const token=++genericGeneration; openTextDoc(rec.doc,rec.identity||("ephemeral:"+Date.now()),rec.format||"txt",[],token,true);return;
+          const token=++loadEpoch;++loadToken;openTextDoc(rec.doc,rec.identity||("ephemeral:"+Date.now()),rec.format||"txt",[],token,true);return;
         }
-        mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++genericGeneration;
+        mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++loadEpoch;++loadToken;
         doc=rec.doc;
         if(rec.audioBlob){ isDemo=false; pendingAudioFile=rec.audioBlob;   // keep the blob persisted on re-save
           if(singleAudioObjUrl)URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=URL.createObjectURL(rec.audioBlob);audio.src=singleAudioObjUrl;open(); }
@@ -991,7 +991,7 @@
         const pl={book:book||"Book", tracks, idx:0, globalChaps:[]};
         tracks.forEach((t,ti)=>{ if(Array.isArray(t.chapters)) t.chapters.forEach(c=>{
           if(c && typeof c.start==="number") pl.globalChaps.push({title:c.title, trackIdx:ti, start:c.start}); }); });
-        playlist=pl; resolve(tracks.length);
+        resolve(tracks.length?pl:null);
       };
       const pairByNumber=()=>{
         const nos=Object.keys(syncByNo).filter(no=>audioByNo[no]).sort();
@@ -1028,23 +1028,23 @@
   }
   const trackLabel = t => t.syncFile ? t.syncFile.name : (t.name || ("track "+(t.no||"")));
   let loadToken=0, curObjUrl=null, singleAudioObjUrl=null;
-  function loadTrack(idx, seekT, autoplay){
+  function loadTrack(idx, seekT, autoplay, epoch=loadEpoch){
     if(!playlist || idx<0 || idx>=playlist.tracks.length) return;
     const token=++loadToken;                 // guard against out-of-order async loads
     const t=playlist.tracks[idx]; t._retried=false;   // allow one expired-link retry per load (see audio 'error')
     loadSync(t).then(d=>{
-      if(token!==loadToken) return;           // a newer loadTrack superseded this one
+      if(token!==loadToken||epoch!==loadEpoch) return; // a newer selection/load superseded this one
       const bad=validateDoc(d, trackLabel(t));
       if(bad){ toast("Skipped "+trackLabel(t)+" — malformed sync"); console.warn("validateDoc:", bad); return; }  // leave playlist.idx on the last good track
       playlist.idx=idx;                        // commit position only now the sync is valid — never point idx at a track that didn't load (else save / resume / "▸ N of M" desync)
-      mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++genericGeneration;
+      mode="audio";sourceIdentity="";currentFormat="";positionReady=true;
       doc=d; isDemo=false; pendingAudioFile=t.audioFile||null;
       pendingSeek=Math.max(0, seekT||0); pendingAutoplay=!!autoplay;
       build(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
       if(curObjUrl){ URL.revokeObjectURL(curObjUrl); curObjUrl=null; }   // free the previous track's blob URL
       setSeg(0); setChap(0);
-      return trackAudioSrc(t).then(src=>{ if(token===loadToken) audio.src=src; });  // -> loadedmetadata seeks/autoplays
-    }).catch(()=>{ if(token===loadToken) toast("Couldn't load "+trackLabel(t)); });
+      return trackAudioSrc(t).then(src=>{ if(token===loadToken&&epoch===loadEpoch&&mode!=="text")audio.src=src; });  // -> loadedmetadata seeks/autoplays
+    }).catch(()=>{ if(token===loadToken&&epoch===loadEpoch) toast("Couldn't load "+trackLabel(t)); });
   }
   function prevTrack(){ if(playlist) loadTrack(audio.currentTime<3 ? playlist.idx-1 : playlist.idx, 0, true); }
   function nextTrack(){ if(playlist) loadTrack(playlist.idx+1, 0, true); }
@@ -1057,15 +1057,17 @@
   function loadPlaylistPos(book){ try{ return JSON.parse(localStorage.getItem(plKey(book))||"null"); }catch(e){ return null; } }
 
   function startBook(files){
-    mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++genericGeneration;
-    dbxBook = null;                 // local-folder book -> not synced to Dropbox
-    buildPlaylist(files).then(n=>{
-      if(!n){ toast("No matching track + sync files in that selection."); return; }
+    const epoch=++loadEpoch;++loadToken;
+    buildPlaylist(files).then(pl=>{
+      if(epoch!==loadEpoch)return;
+      if(!pl){ toast("No matching track + sync files in that selection."); return; }
+      mode="audio";sourceIdentity="";currentFormat="";positionReady=true;playlist=pl;
+      dbxBook = null;                 // local-folder book -> not synced to Dropbox
       showReaderUI();
       const saved=loadPlaylistPos(playlist.book);
       const startIdx=(saved && saved.idx>=0 && saved.idx<playlist.tracks.length) ? saved.idx : 0;
       if(saved && typeof saved.seg==="number") pendingReadSeg=saved.seg;   // resume on the page last read
-      loadTrack(startIdx, saved?saved.t:0, false);
+      loadTrack(startIdx, saved?saved.t:0, false, epoch);
       if(saved && (saved.idx>0 || (saved.t||0)>5)) toast("Resumed — track "+(startIdx+1)+" of "+playlist.tracks.length);
       else toast(playlist.tracks.length+" tracks · reads continuously");
     });
@@ -1075,25 +1077,25 @@
   let haveAudio=false, haveSync=false;
   function maybeReady(){ if(haveAudio && haveSync) $("#startBtn").style.display="flex"; }
   $("#audioIn").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return;
-    mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++genericGeneration;
+    mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++loadEpoch;++loadToken;
     pendingAudioFile=f; isDemo=false;if(singleAudioObjUrl)URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=URL.createObjectURL(f);audio.src=singleAudioObjUrl;haveAudio=true;
     $("#audioCk").textContent="●"; $("#audioName").textContent=f.name; maybeReady();
     if(haveSync && doc) open();   // text-only resume path: sync already loaded, just needed audio
   });
   $("#syncIn").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return;
-    const fr=new FileReader(); fr.onload=()=>{ try{ doc=JSON.parse(fr.result); haveSync=true;
+    const epoch=++loadEpoch;++loadToken;const fr=new FileReader(); fr.onload=()=>{if(epoch!==loadEpoch)return;try{doc=JSON.parse(fr.result);haveSync=true;
       $("#syncCk").textContent="●"; $("#syncName").textContent=f.name; maybeReady(); }
       catch(err){ alert("Could not read that JSON: "+err.message); } }; fr.readAsText(f); });
   $("#startBtn").onclick=open;
   $("#bookIn").addEventListener("change",e=>{ const files=e.target.files; if(files && files.length) startBook(files); });
   $("#tryDemo").onclick=()=>{ if(!window.DEMO){ alert("Demo data missing."); return; }
-    mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++genericGeneration;
+    mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++loadEpoch;++loadToken;
     isDemo=true; doc=window.DEMO.align; audio.src=window.DEMO.audioDataUri; open(); };
 
   function clearMediaSession(){if(!("mediaSession" in navigator))return;for(const a of ["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"])try{navigator.mediaSession.setActionHandler(a,null);}catch(e){}try{navigator.mediaSession.metadata=null;}catch(e){}}
   function teardownAudioForText(){++loadToken;pendingSeek=0;pendingAutoplay=false;sleepMode="off";sleepAt=0;sleepChapterEnd=Infinity;cancelAnimationFrame(rafId);rafId=null;audio.pause();releaseWake();clearMediaSession();if(curObjUrl){URL.revokeObjectURL(curObjUrl);curObjUrl=null;}if(singleAudioObjUrl){URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=null;}audio.removeAttribute("src");try{audio.load();}catch(e){}haveAudio=false;haveSync=false;$("#audioCk").textContent="○";$("#syncCk").textContent="○";$("#startBtn").style.display="none";}
   function openTextDoc(nextDoc,identity,format,warnings,token,restored){
-    if(token!==genericGeneration)return false;const bad=validateDoc(nextDoc,"generic "+format);
+    if(token!==loadEpoch)return false;const bad=validateDoc(nextDoc,"generic "+format);
     if(bad)giFail("CONTRACT",bad);mode="text";sourceIdentity=identity;currentFormat=format;positionReady=false;
     playlist=null;dbxBook=null;isDemo=false;pendingAudioFile=null;teardownAudioForText();doc=nextDoc;
     curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();showReaderUI();
@@ -1101,10 +1103,10 @@
     navigateTextSeg(seg,false,false);positionReady=true;lastSave=0;saveSession(token);
     const ws=warnings||[];if(ws.length)toast("Opened with "+ws.length+" warning"+(ws.length===1?"":"s"));else if(!restored)toast("Opened text-only book");return true;
   }
-  $("#genericIn").addEventListener("change",async e=>{const f=e.target.files[0];if(!f)return;const token=++genericGeneration,small=$("#genericBtn small"),original=small.textContent,current=()=>{if(token!==genericGeneration)giFail("STALE_IMPORT","import superseded");};small.textContent="Opening locally…";
+  $("#genericIn").addEventListener("change",async e=>{const f=e.target.files[0];if(!f)return;const token=++loadEpoch;++loadToken;const small=$("#genericBtn small"),original=small.textContent,current=()=>{if(token!==loadEpoch)giFail("STALE_IMPORT","import superseded");};small.textContent="Opening locally…";
     try{if(f.size>GI_LIMIT.file)giFail("LIMIT","selected file is too large");current();const bytes=await f.arrayBuffer();current();const result=await genericDocFromBytes(bytes,f.name,current);current();const identity=await genericIdentity(bytes,result.format);current();openTextDoc(result.doc,identity,result.format,result.warnings,token,false);}
-    catch(err){if(token===genericGeneration){const stage=(err&&err.code)||"IMPORT";alert("This file can't be opened ("+stage+"):\n\n"+((err&&err.message)||err));}}
-    finally{if(token===genericGeneration){small.textContent=original;e.target.value="";}}
+    catch(err){if(token===loadEpoch){const stage=(err&&err.code)||"IMPORT";alert("This file can't be opened ("+stage+"):\n\n"+((err&&err.message)||err));}}
+    finally{if(token===loadEpoch){small.textContent=original;e.target.value="";}}
   });
 
   function showReaderUI(){
@@ -1211,10 +1213,13 @@
     const t = playlist && playlist.tracks[playlist.idx];
     if(!t || !t.audioPath || t._retried) return;          // only Dropbox-streamed tracks, once per load
     t._retried = true;
-    const at = audio.currentTime || 0, was = !audio.paused;
-    dbxLink(t.audioPath).then(src => { audio.src = src;   // re-resolve a fresh link and resume in place
-      audio.addEventListener("loadedmetadata", function once(){ audio.removeEventListener("loadedmetadata", once);
-        try{ audio.currentTime = at; }catch(e){} if(was) audio.play().catch(()=>{}); }, { once:true });
+    const at=audio.currentTime||0,was=!audio.paused,epoch=loadEpoch,token=loadToken,owner=playlist;
+    dbxLink(t.audioPath).then(src => {
+      if(mode==="text"||epoch!==loadEpoch||token!==loadToken||playlist!==owner)return;
+      audio.addEventListener("loadedmetadata",function once(){audio.removeEventListener("loadedmetadata",once);
+        if(mode==="text"||epoch!==loadEpoch||token!==loadToken||playlist!==owner)return;
+        try{audio.currentTime=at;}catch(e){}if(was)audio.play().catch(()=>{});},{once:true});
+      audio.src=src;   // re-resolve a fresh link and resume in place
     }).catch(()=>{});
   });
 
@@ -1234,13 +1239,14 @@
   }
   async function dbxOpenBook(folder, name){
     try{
-      mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++genericGeneration;
+      const epoch=++loadEpoch,current=()=>epoch===loadEpoch;++loadToken;
       dbxMsg("Opening “"+name+"” — fetching links…");
-      const entries = await dbxList(folder), byName = {};
+      const entries=await dbxList(folder);if(!current())return;const byName={};
       entries.forEach(e => { if(e[".tag"]==="file") byName[e.name.toLowerCase()] = e.path_lower; });
       let tracks = [], book = name;
       if(byName["manifest.json"]){
-        const man = await fetch(await dbxLink(byName["manifest.json"])).then(r=>r.json());
+        const manifestUrl=await dbxLink(byName["manifest.json"]);if(!current())return;
+        const man=await fetch(manifestUrl).then(r=>r.json());if(!current())return;
         book = man.book || name;
         for(const t of (man.tracks||[])){
           const ap = byName[(t.audio||"").toLowerCase()], sp = byName[(t.file||"").toLowerCase()];
@@ -1259,13 +1265,13 @@
       const pl = { book: book||"Book", tracks, idx:0, globalChaps:[] };
       tracks.forEach((t,ti)=>{ if(Array.isArray(t.chapters)) t.chapters.forEach(c=>{
         if(c && typeof c.start==="number") pl.globalChaps.push({ title:c.title, trackIdx:ti, start:c.start }); }); });
-      playlist = pl; dbxBook = pl.book; showReaderUI();
-      dbxPosCache = await dbxLoadPositions();              // latest place from ANY of this user's devices
+      const positions=await dbxLoadPositions();if(!current())return; // latest place from ANY of this user's devices
+      mode="audio";sourceIdentity="";currentFormat="";positionReady=true;playlist=pl;dbxBook=pl.book;dbxPosCache=positions;showReaderUI();
       const dP = dbxPosCache[pl.book], lP = loadPlaylistPos(pl.book);
       const saved = (dP && (!lP || (dP.ts||0) >= (lP.ts||0))) ? dP : lP;   // resume at the newer of Dropbox vs local
       const startIdx = (saved && saved.idx>=0 && saved.idx<tracks.length) ? saved.idx : 0;
       if(saved && typeof saved.seg==="number") pendingReadSeg = saved.seg;
-      loadTrack(startIdx, saved?saved.t:0, false);
+      loadTrack(startIdx, saved?saved.t:0, false, epoch);
       toast(tracks.length+" tracks · streaming from Dropbox" + (dP ? " · resumed your place" : ""));
     }catch(e){ dbxMsg("Couldn't open “"+name+"”: "+e.message); }
   }

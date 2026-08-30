@@ -190,10 +190,55 @@ test("pure spine/nav assembly rejects missing models and preserves warning seman
   ]);
 });
 
+test("pure EPUB assembly preserves aliases, Unicode targets, fallback titles, and chapter order",()=>{
+  const aliased=resourceModels();
+  aliased.get("OPS/c1.xhtml").anchors.push({id:"uno",blockIndex:0});
+  const pkg=gi.assembleOpfModel(opfModel(),"OPS/package.opf","fallback.epub",hasEntry);
+  const ordered=gi.projectGeneric(gi.assembleEpubBook(pkg,aliased,{toc:true,candidates:[
+    {label:"Second first",href:"c2.xhtml"},
+    {label:"First alias",href:"c1.xhtml#uno"},
+    {label:"First duplicate",href:"c1.xhtml#one"},
+  ]}));
+  assert.deepEqual(ordered.chapters,[
+    {title:"First alias",start:0,seg:0},
+    {title:"Second first",start:2,seg:2},
+  ]);
+
+  const unicodeModel=opfModel();
+  unicodeModel.titles=[" "];
+  unicodeModel.items=unicodeModel.items.filter(x=>x.id!=="c2"&&x.id!=="skip");
+  unicodeModel.items.find(x=>x.id==="c1").href="caf%C3%A9.xhtml";
+  unicodeModel.spine=[{idref:"c1",linear:""}];
+  const unicodePaths=new Set(["OPS/package.opf","OPS/nav.xhtml","OPS/café.xhtml"]);
+  const unicodePkg=gi.assembleOpfModel(unicodeModel,"OPS/package.opf","fallback.epub",p=>unicodePaths.has(p));
+  assert.equal(unicodePkg.title,"fallback");
+  const unicodeResources=new Map([["OPS/café.xhtml",{blocks:[
+    {text:"Unicode prose.",kind:"prose",resourcePath:"OPS/café.xhtml"},
+  ],anchors:[{id:"é",blockIndex:0}]}]]);
+  const unicodeDoc=gi.projectGeneric(gi.assembleEpubBook(unicodePkg,unicodeResources,{toc:true,candidates:[
+    {label:"Unicode",href:"caf%C3%A9.xhtml#%C3%A9"},
+  ]}));
+  assert.deepEqual(unicodeDoc.chapters,[{title:"Unicode",start:0,seg:0}]);
+
+  const duplicateAnchors=resourceModels();
+  duplicateAnchors.get("OPS/c1.xhtml").anchors.push({id:"one",blockIndex:1});
+  assert.throws(()=>gi.assembleEpubBook(pkg,duplicateAnchors,{toc:true,candidates:[]}),e=>e.code==="ANCHOR");
+});
+
 test("XML ceiling is enforced on source bytes before decoding",()=>{
   const old=gi.GI_LIMIT.xml;
   try{gi.GI_LIMIT.xml=4;assert.throws(()=>gi.decodeXmlBytes(te.encode("12345")),e=>e.code==="LIMIT");}
   finally{gi.GI_LIMIT.xml=old;}
+});
+
+test("additional ZIP and XML structural negatives fail with stable categories",async()=>{
+  const trailing=cat(await makeZip([{name:"mimetype",text:"application/epub+zip"}]),Uint8Array.of(0));
+  assert.throws(()=>gi.parseZip(trailing),e=>e.code==="ZIP_EOCD");
+  const multidisk=await makeZip([{name:"mimetype",text:"application/epub+zip"}]);
+  new DataView(multidisk.buffer).setUint16(multidisk.length-18,1,true);
+  assert.throws(()=>gi.parseZip(multidisk),e=>e.code==="ZIP_MULTI");
+  assert.throws(()=>gi.decodeXmlBytes(te.encode('<?xml version="1.0" encoding="UTF-16"?><x/>')),e=>e.code==="XML_ENCODING");
+  assert.throws(()=>gi.decodeXmlBytes(te.encode('<?xml encoding="UTF-8" encoding="UTF-8"?><x/>')),e=>e.code==="XML_DECL");
 });
 
 test("cancellation is checked after awaited decompression and stops the reader",async()=>{
