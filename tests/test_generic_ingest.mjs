@@ -11,7 +11,7 @@ const html=readFileSync(join(root,"index.html"),"utf8");
 const a=html.indexOf("// GENERIC_INGEST_BEGIN"),b=html.indexOf("// GENERIC_INGEST_END");
 assert.ok(a>=0&&b>a,"shipped generic-ingest block missing");
 const modPath=join(tmpdir(),`generic_ingest_${process.pid}.mjs`);
-const names=["GI_LIMIT","decodeGenericText","txtBook","markdownInline","markdownBook","projectGeneric","crc32","parseZip","readZipEntry","checkXmlDoctype","resolveHref","genericDocFromBytes","genericIdentity","genericPositionKey"];
+const names=["GI_LIMIT","decodeGenericText","decodeXmlBytes","txtBook","markdownInline","markdownBook","projectGeneric","crc32","parseZip","readZipEntry","checkXmlDoctype","resolveHref","selectOpfPath","assembleOpfModel","assembleEpubBook","genericDocFromBytes","genericIdentity","genericPositionKey"];
 writeFileSync(modPath,html.slice(a,b)+`\nexport {${names.join(",")}};\n`);
 after(()=>{try{rmSync(modPath);}catch{}});
 const gi=await import(pathToFileURL(modPath).href);
@@ -44,7 +44,9 @@ test("Markdown scanner has frozen nonrecursive/literal behavior",()=>{
   assert.equal(gi.markdownInline("[a](nested(x))"),"[a](nested(x))");
   assert.equal(gi.markdownInline("![alt]() [name][ref]"),"alt name");
   assert.equal(gi.markdownInline("~single~"),"~single~");
-  assert.equal(gi.markdownInline("`a``b``c`"),"a``b``c");
+  assert.equal(gi.markdownInline("`a``b``c`"),"`a``b``c`");
+  assert.equal(gi.markdownInline("``double``"),"``double``");
+  assert.equal(gi.markdownInline("before `one` after"),"before one after");
   assert.equal(gi.markdownInline("`*code*`"),"*code*");
   assert.equal(gi.markdownInline("tail\\"),"tail\\");
 });
@@ -83,6 +85,122 @@ test("href and lexical DOCTYPE boundaries are exact",()=>{
   gi.checkXmlDoctype("<!DoCtYpE html><html/>",true);
   assert.throws(()=>gi.checkXmlDoctype("<!DOCTYPE html [<!ENTITY x 'y'>]><html/>",true),e=>e.code==="XML_DOCTYPE");
   assert.throws(()=>gi.checkXmlDoctype("<!DOCTYPE html><!DOCTYPE html><html/>",true),e=>e.code==="XML_DOCTYPE");
+});
+
+const archivePaths=new Set(["OPS/package.opf","OPS/nav.xhtml","OPS/c1.xhtml","OPS/c2.xhtml","OPS/skip.xhtml"]);
+const hasEntry=p=>archivePaths.has(p);
+const opfModel=()=>({
+  version:"3.0",
+  titles:["Fixture Book"],
+  metas:[],
+  items:[
+    {id:"nav",href:"nav.xhtml",media:"application/xhtml+xml",properties:"nav",fallback:false},
+    {id:"c1",href:"c1.xhtml",media:"application/xhtml+xml",properties:"",fallback:false},
+    {id:"c2",href:"c2.xhtml",media:"application/xhtml+xml",properties:"",fallback:false},
+    {id:"skip",href:"skip.xhtml",media:"application/xhtml+xml",properties:"",fallback:false},
+  ],
+  spine:[
+    {idref:"c1",linear:""},
+    {idref:"skip",linear:"no"},
+    {idref:"c2",linear:""},
+  ],
+});
+const resourceModels=()=>new Map([
+  ["OPS/c1.xhtml",{blocks:[
+    {text:"One",kind:"heading",resourcePath:"OPS/c1.xhtml"},
+    {text:"First synthetic paragraph.",kind:"prose",resourcePath:"OPS/c1.xhtml"},
+  ],anchors:[{id:"one",blockIndex:0}]}],
+  ["OPS/c2.xhtml",{blocks:[
+    {text:"Two",kind:"heading",resourcePath:"OPS/c2.xhtml"},
+    {text:"Second synthetic paragraph.",kind:"prose",resourcePath:"OPS/c2.xhtml"},
+  ],anchors:[{id:"two",blockIndex:0}]}],
+]);
+
+test("pure EPUB semantic assembly yields the complete projected document",()=>{
+  const container={rootfiles:[
+    {mediaType:"application/unknown",fullPath:"ignored.opf"},
+    {mediaType:"application/oebps-package+xml",fullPath:"OPS/package.opf"},
+  ]};
+  const op=gi.selectOpfPath(container,hasEntry);
+  assert.equal(op,"OPS/package.opf");
+  const pkg=gi.assembleOpfModel(opfModel(),op,"fallback.epub",hasEntry);
+  assert.equal(pkg.warnings.length,1);
+  const book=gi.assembleEpubBook(pkg,resourceModels(),{toc:true,candidates:[
+    {label:"One",href:"c1.xhtml#one"},
+    {label:"Two",href:"c2.xhtml#two"},
+  ]});
+  assert.deepEqual(gi.projectGeneric(book),{
+    title:"Fixture Book",
+    audio:"",
+    chapters:[{title:"One",start:0,seg:0},{title:"Two",start:1,seg:1}],
+    segments:[
+      {id:0,start:0,end:1,text:"First synthetic paragraph."},
+      {id:1,start:1,end:2,text:"Second synthetic paragraph."},
+    ],
+  });
+});
+
+test("pure container and OPF semantics fail closed across the complete structural boundary",()=>{
+  assert.throws(()=>gi.selectOpfPath({rootfiles:[]},hasEntry),e=>e.code==="EPUB_CONTAINER");
+  assert.throws(()=>gi.selectOpfPath({rootfiles:[{mediaType:"application/oebps-package+xml",fullPath:" "}]},hasEntry),e=>e.code==="EPUB_CONTAINER");
+  assert.throws(()=>gi.selectOpfPath({rootfiles:[{mediaType:"application/oebps-package+xml",fullPath:"OPS/missing.opf"}]},hasEntry),e=>e.code==="EPUB_RESOURCE");
+  const cases=[
+    ["non-3 version",m=>{m.version="2.0";},"EPUB_VERSION"],
+    ["fixed package",m=>{m.metas.push({property:"rendition:layout",text:"pre-paginated"});},"EPUB_SPINE"],
+    ["blank manifest id",m=>{m.items[1].id="";},"EPUB_MANIFEST"],
+    ["duplicate manifest id",m=>{m.items[2].id="c1";},"EPUB_MANIFEST"],
+    ["blank href",m=>{m.items[1].href="";},"EPUB_MANIFEST"],
+    ["duplicate resource",m=>{m.items[2].href="c1.xhtml";},"EPUB_MANIFEST"],
+    ["fallback chain",m=>{m.items[1].fallback=true;},"EPUB_FALLBACK"],
+    ["scripted resource",m=>{m.items[1].properties="scripted";},"EPUB_MANIFEST"],
+    ["missing nav",m=>{m.items[0].properties="";},"EPUB_NAV"],
+    ["multiple nav",m=>{m.items[1].properties="nav";},"EPUB_NAV"],
+    ["wrong nav media",m=>{m.items[0].media="text/html";},"EPUB_NAV"],
+    ["missing spine idref",m=>{m.spine[0].idref="missing";},"EPUB_SPINE"],
+    ["duplicate spine idref",m=>{m.spine[2].idref="c1";},"EPUB_SPINE"],
+    ["unsupported spine media",m=>{m.items[1].media="text/plain";},"EPUB_SPINE"],
+    ["fixed-layout item",m=>{m.items[1].properties="rendition:layout-pre-paginated";},"EPUB_SPINE"],
+    ["empty linear spine",m=>{m.spine.forEach(x=>x.linear="no");},"EPUB_SPINE"],
+  ];
+  for(const [label,mutate,code] of cases){
+    const m=opfModel();mutate(m);
+    assert.throws(()=>gi.assembleOpfModel(m,"OPS/package.opf","fallback.epub",hasEntry),e=>e.code===code,label);
+  }
+});
+
+test("pure spine/nav assembly rejects missing models and preserves warning semantics",()=>{
+  const pkg=gi.assembleOpfModel(opfModel(),"OPS/package.opf","fallback.epub",hasEntry);
+  assert.throws(()=>gi.assembleEpubBook(pkg,new Map(),{toc:true,candidates:[]}),e=>e.code==="EPUB_RESOURCE");
+  const empty=resourceModels();empty.set("OPS/c1.xhtml",{blocks:[],anchors:[]});empty.set("OPS/c2.xhtml",{blocks:[],anchors:[]});
+  assert.throws(()=>gi.assembleEpubBook(pkg,empty,{toc:true,candidates:[]}),e=>e.code==="EMPTY");
+  assert.throws(()=>gi.assembleEpubBook(pkg,resourceModels(),{toc:false,candidates:[]}),e=>e.code==="EPUB_NAV");
+  assert.throws(()=>gi.assembleEpubBook(pkg,resourceModels(),{toc:true,candidates:[{label:"escape",href:"../../x"}]}),e=>e.code==="HREF");
+  const book=gi.assembleEpubBook(pkg,resourceModels(),{toc:true,candidates:[
+    {label:"external",href:"https://example.invalid/x"},
+    {label:"nonlinear",href:"skip.xhtml"},
+    {label:"broken",href:"c1.xhtml#missing"},
+  ]});
+  assert.deepEqual(book.chapterCandidates,[]);
+  assert.deepEqual(book.warnings,[
+    "skipped non-linear spine item",
+    "ignored external TOC link",
+    "ignored non-linear TOC link",
+    "ignored unresolved TOC link",
+    "navigation has no usable chapters",
+  ]);
+});
+
+test("XML ceiling is enforced on source bytes before decoding",()=>{
+  const old=gi.GI_LIMIT.xml;
+  try{gi.GI_LIMIT.xml=4;assert.throws(()=>gi.decodeXmlBytes(te.encode("12345")),e=>e.code==="LIMIT");}
+  finally{gi.GI_LIMIT.xml=old;}
+});
+
+test("cancellation is checked after awaited decompression and stops the reader",async()=>{
+  const bytes=await makeZip([{name:"mimetype",text:"application/epub+zip"},{name:"x",text:"cancel ".repeat(5000),method:8}]);
+  const zip=gi.parseZip(bytes),stale=Object.assign(new Error("stale"),{code:"STALE_IMPORT"});let checks=0;
+  await assert.rejects(()=>gi.readZipEntry(zip,zip.names.get("x"),{n:0},()=>{if(++checks>1)throw stale;}),e=>e===stale);
+  assert.ok(checks>1);
 });
 
 test("resource ceilings reject declared expansion before decompression",async()=>{
