@@ -43,6 +43,12 @@ spec  →  review  →  write  →  review  →  fix  →  merge
 - **Merge commits, never squash** — preserves the spec→review→fix trail.
 - **Public repo, intentionally unprotected:** this relies on CI-equivalent local checks
   plus disciplined exact-head review, not a ruleset or hosted merge gate.
+- **Draft first; land periodic trains.** Ordinary PRs stay draft on their own branches.
+  A fresh disposable `train/<batch>` branch combines reviewed exact heads at a frozen
+  `main`, receives three reviews bound to its exact head plus canonical inventory digest,
+  and is landed by the scrubbed, fail-closed `tools/land_merge_train.py` compare-and-swap
+  path. There is no permanent integration branch and no custom hosted CI. See
+  [`docs/draft-first-integration-trains.md`](docs/draft-first-integration-trains.md).
 - Work from a written contract (chat brief for trivia, a GitHub Issue once it's
   non-trivial), not an unscoped "improve the player."
 
@@ -251,6 +257,11 @@ one command, no network or device needed. Run it before opening a PR. What it co
   requests TAP output, preserves the Node exit status, and additionally refuses any
   case reported with `# SKIP`; `tests/test_node_gate.py` plants a skip to prove that
   fail-closed behavior.
+- `python3 tests/test_merge_train.py` — the dependency-free draft/train policy verifier's
+  exact topology, live identity, inventory-digest, hidden-index/config, scrubbed-landing,
+  dirty-tree, tamper, replacement-object, and strict-JSON refusal checks.
+- `python3 tools/run_local_gate.py` — run the full local gate through the selected Python/Git Bash
+  while routing bytecode caches outside the worktree; use this form for train evidence.
 
 Beyond `check.sh` (can't be automated here):
 

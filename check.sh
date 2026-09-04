@@ -35,6 +35,8 @@ echo "→ wps-gate threshold-logic test"
 "$PYTHON" tests/test_wps_check.py
 echo "→ mandatory Node no-skip gate regression"
 "$PYTHON" tests/test_node_gate.py
+echo "→ draft-first merge-train policy test"
+"$PYTHON" tests/test_merge_train.py
 
 # Player behavior is a JavaScript/security boundary, so the dependency-free Node
 # runner is mandatory and neither suite may silently skip.
