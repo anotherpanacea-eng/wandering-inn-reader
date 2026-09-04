@@ -131,6 +131,8 @@
   <div class="pick">
     <button class="btn primary" id="resumeBtn" style="display:none;">▶ Resume<small id="resumeName"></small></button>
     <button class="btn primary" id="tryDemo">▶ Try the demo<small>A short sample, no files needed</small></button>
+    <label class="btn" id="genericBtn"><span class="ck">▤</span><span>Load text or ebook<small>.txt, .md, .markdown, or EPUB 3</small></span>
+      <input type="file" id="genericIn" accept=".txt,.md,.markdown,.epub,text/plain,text/markdown,application/epub+zip"></label>
     <label class="btn" id="audioBtn"><span class="ck" id="audioCk">○</span><span>Load audio file<small id="audioName">your .mp3 / .m4a chapter or volume</small></span>
       <input type="file" id="audioIn" accept="audio/*,.mp3,.m4a,.m4b,.aac"></label>
     <label class="btn" id="syncBtn"><span class="ck" id="syncCk">○</span><span>Load sync file<small id="syncName">the .json the aligner produced</small></span>
@@ -190,9 +192,11 @@
   let segPage=[], pageW=0, colPad=0, relayoutT=0, pgFollowWord=-1;   // paged geometry: segPage[i]=start column; pageW=px/page; pgFollowWord=last word the page followed
   let lastUserInput=0, scrollT=0, pendingReadSeg=-1, pausedAt=0;
   let playlist=null, pendingSeek=0, pendingAutoplay=false;   // continuous multi-track book
+  let mode="audio", sourceIdentity="", sourceIdentityStable=true, currentFormat="", positionReady=true, loadEpoch=0;
+  let sessionWriteQueue=Promise.resolve();
 
   const fmt = t => { t=Math.max(0,t|0); const m=(t/60)|0, s=t%60; return m+":"+(s<10?"0":"")+s; };
-  const posKey = () => "inn-reader-pos:"+(doc?doc.title:"x");
+  const posKey = () => genericPositionKey(mode,sourceIdentity,doc?doc.title:"x");
 
   // ---------- tiny DOM helpers (no innerHTML; safe against title content) ----------
   function clear(n){ while(n.firstChild) n.removeChild(n.firstChild); }
@@ -270,6 +274,133 @@
     if(!errs.length) return null;
     return tag+errs.length+" problem(s):\n  • "+errs.slice(0,8).join("\n  • ")+(errs.length>8 ? "\n  • …" : "");
   }
+
+  // GENERIC_INGEST_BEGIN — pure/local import core; tests load this shipped block.
+  const GI_LIMIT={file:100*1048576,text:16000000,entries:10000,entry:32*1048576,
+    total:256*1048576,xml:16*1048576,segments:250000,segment:100000,chapters:25000};
+  const GI_NS={ocf:"urn:oasis:names:tc:opendocument:xmlns:container",
+    opf:"http://www.idpf.org/2007/opf", xhtml:"http://www.w3.org/1999/xhtml",
+    dc:"http://purl.org/dc/elements/1.1/", epub:"http://www.idpf.org/2007/ops",
+    xml:"http://www.w3.org/XML/1998/namespace"};
+  function giFail(code,msg){ const e=new Error(msg); e.code=code; throw e; }
+  function genericErrorMessage(value){const s=String(value==null?"":value).replace(/[\u0000-\u001f\u007f-\u009f]/g," ").replace(/\s+/g," ").trim();return [...s].slice(0,160).join("")||"The file is invalid";}
+  function genericPositionKey(readMode,identity,title){return "inn-reader-pos:"+(readMode==="text"?identity:(title||"x"));}
+  async function genericIdentityResult(bytes,format,digest=crypto.subtle){
+    try{if(!digest||typeof digest.digest!=="function")throw new Error("SHA-256 unavailable");const h=new Uint8Array(await digest.digest("SHA-256",bytes));return {identity:"generic-v1:"+format+":"+[...h].map(x=>x.toString(16).padStart(2,"0")).join(""),stable:true};}
+    catch(e){const a=new Uint32Array(4);try{crypto.getRandomValues(a);}catch(x){a[0]=Date.now()>>>0;a[1]=(Math.random()*0xffffffff)>>>0;}return {identity:"ephemeral:"+[...a].map(x=>x.toString(16).padStart(8,"0")).join(""),stable:false};}
+  }
+  async function genericIdentity(bytes,format){return (await genericIdentityResult(bytes,format)).identity;}
+  function genericFormat(name){ const n=(name||"").toLowerCase();
+    if(n.endsWith(".txt")) return "txt"; if(n.endsWith(".md")||n.endsWith(".markdown")) return "md";
+    if(n.endsWith(".epub")) return "epub"; return ""; }
+  function genericTitle(name,format){ const ext=format==="md"?/\.(?:md|markdown)$/i:new RegExp("\\."+format+"$","i");
+    const s=(name||"").replace(ext,"").trim(); return s||(format==="txt"?"Untitled text":format==="md"?"Untitled Markdown":"Untitled EPUB"); }
+  function asBytes(input){ return input instanceof Uint8Array?input:new Uint8Array(input); }
+  function decodeGenericText(input){ const b=asBytes(input); let enc="utf-8",off=0;
+    if(b[0]===0xef&&b[1]===0xbb&&b[2]===0xbf) off=3;
+    else if(b[0]===0xff&&b[1]===0xfe){enc="utf-16le";off=2;}
+    else if(b[0]===0xfe&&b[1]===0xff){enc="utf-16be";off=2;}
+    else if((b[0]===0&&b[1]===0&&b[2]===0xfe&&b[3]===0xff)||(b[0]===0xff&&b[1]===0xfe&&b[2]===0&&b[3]===0)) giFail("ENCODING","UTF-32 is unsupported");
+    else {const unsupported=[[0x2b,0x2f,0x76,0x38],[0x2b,0x2f,0x76,0x39],[0x2b,0x2f,0x76,0x2b],[0x2b,0x2f,0x76,0x2f],[0xf7,0x64,0x4c],[0xdd,0x73,0x66,0x73],[0x0e,0xfe,0xff],[0xfb,0xee,0x28],[0x84,0x31,0x95,0x33]];if(unsupported.some(sig=>sig.every((x,i)=>b[i]===x)))giFail("ENCODING","unsupported byte-order mark");}
+    let s; try{s=new TextDecoder(enc,{fatal:true}).decode(b.subarray(off));}catch(e){giFail("ENCODING","invalid "+enc);}
+    if(s.includes("\0")) giFail("ENCODING","NUL in decoded text");
+    s=s.replace(/\r\n?/g,"\n"); if(s.length>GI_LIMIT.text) giFail("LIMIT","decoded text is too large"); return {text:s,encoding:enc,bom:off>0}; }
+  function collapseText(s){ return s.replace(/[\s\u00a0]+/gu," ").trim(); }
+  function txtBook(input,name){ const s=decodeGenericText(input).text;
+    const blocks=s.split(/\n[\t \u00a0]*\n+/).map(collapseText).filter(Boolean).map(text=>({text,kind:"prose",resourcePath:""}));
+    if(!blocks.length) giFail("EMPTY","text contains no prose"); return {title:genericTitle(name,"txt"),blocks,chapterCandidates:[],warnings:[]}; }
+  const MD_PUNCT="!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+  function markdownInline(s){ let out="",i=0;
+    const labelEnd=(p)=>{ for(let j=p;j<s.length;j++){ const c=s[j]; if(c==="]") return j; if(c==="["||c==="\\"||c==="\n") return -1; } return -1; };
+    const linkAt=(p,image,ref)=>{ const a=p+(image?2:1),z=labelEnd(a); if(z<a+1) return null; const open=ref?"[":"("; if(s[z+1]!==open) return null;
+      const close=ref?"]":")", q=s.indexOf(close,z+2); if(q<0) return null; const body=s.slice(z+2,q);
+      if(ref){ if(!body||/[\[\]\\\n]/.test(body)) return null; }
+      else if(/[\s\x00-\x1f()\\]/.test(body)) return null;
+      return {text:s.slice(a,z),end:q+1}; };
+    while(i<s.length){ const c=s[i];
+      if(c==="\\"&&i+1<s.length&&MD_PUNCT.includes(s[i+1])){out+=s[i+1];i+=2;continue;}
+      if(c==="`"&&s[i-1]!=="`"&&s[i+1]!=="`"){ const q=s.indexOf("`",i+1);if(q>i+1&&s[q-1]!=="`"&&s[q+1]!=="`"){out+=s.slice(i+1,q);i=q+1;continue;} }
+      if((c==="!"&&s[i+1]==="[")||c==="["){ let m=null; const image=c==="!";
+        m=linkAt(i,image,false)||linkAt(i,image,true); if(m){out+=m.text;i=m.end;continue;} out+=s.slice(i);break; }
+      if(c==="*"||c==="_"||c==="~"){ let run=1; while(s[i+run]===c)run++; const allowed=c==="~"?(run===2?2:0):(run<=2?run:0);
+        if(!allowed){out+=s.slice(i,i+run);i+=run;continue;} const tok=c.repeat(run); let q=i+run;
+        while((q=s.indexOf(tok,q))>=0){ if(s[q-1]!==c&&s[q+run]!==c) break; q+=run; }
+        if(q>=0){ const inner=s.slice(i+run,q); if(inner.trim()===inner&&inner&& !/[\\`*~_!\[\]\n]/.test(inner)){out+=inner;i=q+run;continue;} }
+      }
+      out+=c;i++;
+    } return out; }
+  function markdownBook(input,name){ const lines=decodeGenericText(input).text.split("\n"),blocks=[],chapterCandidates=[],warnings=[]; let i=0,para=[];
+    const push=(text,kind="prose")=>{text=kind==="code"?collapseText(text):collapseText(markdownInline(text));if(text)blocks.push({text,kind,resourcePath:""});};
+    const flush=()=>{if(para.length){push(para.join(" "));para=[];}};
+    while(i<lines.length){ const line=lines[i]; const fm=/^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+      if(fm){flush();const ch=fm[2][0],n=fm[2].length,a=[];i++;while(i<lines.length&&!new RegExp("^ {0,3}"+ch+"{"+n+",}\\s*$").test(lines[i]))a.push(lines[i++]);if(i<lines.length)i++;push(a.join("\n"),"code");continue;}
+      const atx=/^ {0,3}(#{1,6})[\t ]+(.+?)\s*$/.exec(line); if(atx){flush();let t=atx[2].replace(/[\t ]+#+[\t ]*$/,"");t=collapseText(markdownInline(t));if(t){const bi=blocks.length;blocks.push({text:t,kind:"heading",resourcePath:""});chapterCandidates.push({title:t,blockIndex:bi,resourcePath:""});}i++;continue;}
+      if(i+1<lines.length&&line.trim()&&/^ {0,3}(?:={3,}|-{3,})\s*$/.test(lines[i+1])){flush();const t=collapseText(markdownInline(line));if(t){const bi=blocks.length;blocks.push({text:t,kind:"heading",resourcePath:""});chapterCandidates.push({title:t,blockIndex:bi,resourcePath:""});}i+=2;continue;}
+      if(!line.trim()){flush();i++;continue;}
+      const item=/^\s*(?:[-+*]|\d+\.)\s+(.+)$/.exec(line),quote=/^\s*>\s?(.*)$/.exec(line);
+      if(item){flush();const a=[item[1]];i++;while(i<lines.length){const c=/^[ \t]{2,3}(\S.*)$/.exec(lines[i]);if(!c)break;a.push(c[1]);i++;}push(a.join(" "),"list");continue;} if(quote){flush();const a=[quote[1]];i++;while(i<lines.length){const c=/^\s*>\s?(.*)$/.exec(lines[i]);if(!c)break;a.push(c[1]);i++;}push(a.join(" "),"quote");continue;}
+      if(/^(?: {4}|\t)/.test(line)){flush();const a=[];while(i<lines.length&&/^(?: {4}|\t)/.test(lines[i]))a.push(lines[i++].replace(/^(?: {4}|\t)/,""));push(a.join("\n"),"code");continue;}
+      para.push(line.trim());i++;
+    } flush(); if(!blocks.length)giFail("EMPTY","Markdown contains no prose"); return {title:genericTitle(name,"md"),blocks,chapterCandidates,warnings}; }
+  function projectGeneric(book){ const kept=[],oldToNew=new Map(),drop=new Set(),cands=(book.chapterCandidates||[]).map(c=>Object.assign({},c));
+    for(const c of cands){ const bi=c.blockIndex, b=book.blocks[bi]; if(!b||b.kind!=="heading"||collapseText(b.text)!==collapseText(c.title))continue;
+      let next=-1;for(let j=bi+1;j<book.blocks.length;j++){if(book.blocks[j].resourcePath!==b.resourcePath)break;if(collapseText(book.blocks[j].text)){next=j;break;}}
+      if(next>=0){drop.add(bi);c.blockIndex=next;}else{c.drop=true;(book.warnings||[]).push("chapter heading has no following prose");} }
+    for(let i=0;i<book.blocks.length;i++){if(drop.has(i))continue;const t=collapseText(book.blocks[i].text);if(!t)continue;if([...t].length>GI_LIMIT.segment)giFail("LIMIT","segment too large");oldToNew.set(i,kept.length);kept.push(t);}
+    if(!kept.length)giFail("EMPTY","document contains no prose");if(kept.length>GI_LIMIT.segments)giFail("LIMIT","too many segments");
+    const total=kept.reduce((n,t)=>n+[...t].length,0);if(total>GI_LIMIT.text)giFail("LIMIT","document text too large");
+    const chapters=[],seen=new Set();for(const c of cands){if(c.drop)continue;const seg=oldToNew.get(c.blockIndex);const title=collapseText(c.title||"");if(seg==null||!title||seen.has(seg))continue;seen.add(seg);chapters.push({title,start:seg,seg});}
+    chapters.sort((a,b)=>a.seg-b.seg);if(chapters.length>GI_LIMIT.chapters)giFail("LIMIT","too many chapters");
+    return {title:collapseText(book.title)||"Untitled",audio:"",chapters,segments:kept.map((text,i)=>({id:i,start:i,end:i+1,text}))}; }
+  let crcTable=null; function crc32(bytes){ if(!crcTable){crcTable=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?0xedb88320^(c>>>1):c>>>1;crcTable[n]=c>>>0;}}
+    let c=0xffffffff;for(const b of bytes)c=crcTable[(c^b)&255]^(c>>>8);return (c^0xffffffff)>>>0; }
+  function canonicalZipName(raw){ let s;try{s=new TextDecoder("utf-8",{fatal:true}).decode(raw);}catch(e){giFail("ZIP_PATH","invalid UTF-8 filename");}
+    s=s.normalize("NFC");if(!s||s.includes("\0")||s.includes("\\")||s.startsWith("/")||s.startsWith("//")||/^[A-Za-z]:/.test(s))giFail("ZIP_PATH","unsafe archive path");
+    const dir=s.endsWith("/"),p=(dir?s.slice(0,-1):s).split("/");if(p.some(x=>!x||x==="."||x===".."))giFail("ZIP_PATH","unsafe archive path");return {name:p.join("/"),dir}; }
+  function parseZip(input){ const b=asBytes(input);if(b.length>GI_LIMIT.file)giFail("LIMIT","archive too large");const v=new DataView(b.buffer,b.byteOffset,b.byteLength),u16=o=>v.getUint16(o,true),u32=o=>v.getUint32(o,true);
+    let e=-1;for(let i=b.length-22;i>=Math.max(0,b.length-65557);i--){if(u32(i)===0x06054b50&&i+22+u16(i+20)===b.length){e=i;break;}}if(e<0)giFail("ZIP_EOCD","missing EOCD");
+    if(u16(e+4)||u16(e+6)||u16(e+8)!==u16(e+10))giFail("ZIP_MULTI","multi-disk ZIP unsupported");const count=u16(e+10),cs=u32(e+12),co=u32(e+16);if(count===0xffff||cs===0xffffffff||co===0xffffffff)giFail("ZIP64","ZIP64 unsupported");if(count>GI_LIMIT.entries||co+cs!==e)giFail("ZIP_RANGE","invalid central directory");
+    const entries=[],names=new Map();let p=co,total=0;for(let n=0;n<count;n++){if(p+46>e||u32(p)!==0x02014b50)giFail("ZIP_CENTRAL","bad central header");const flags=u16(p+8),method=u16(p+10),crc=u32(p+16),comp=u32(p+20),size=u32(p+24),nl=u16(p+28),xl=u16(p+30),cl=u16(p+32),disk=u16(p+34),off=u32(p+42);if(disk)giFail("ZIP_MULTI","multi-disk ZIP entry unsupported");if(p+46+nl+xl+cl>e)giFail("ZIP_RANGE","truncated central entry");
+      if(method!==0&&method!==8)giFail("ZIP_METHOD","unsupported compression");if(method===0&&comp!==size)giFail("ZIP_SIZE","stored entry size mismatch");const mask=method===0?0x0808:0x080e;if(flags&~mask)giFail("ZIP_FLAGS","unsupported ZIP flags");const raw=b.subarray(p+46,p+46+nl);if(raw.some(x=>x>=128)&&!(flags&0x800))giFail("ZIP_FLAGS","UTF-8 flag required");const cn=canonicalZipName(raw);if(names.has(cn.name))giFail("ZIP_PATH","duplicate archive path");
+      for(let x=p+46+nl;x<p+46+nl+xl;){if(x+4>p+46+nl+xl)giFail("ZIP_EXTRA","bad extra field");const id=u16(x),len=u16(x+2);if(x+4+len>p+46+nl+xl)giFail("ZIP_EXTRA","bad extra field");if(id===1)giFail("ZIP64","ZIP64 extra unsupported");x+=4+len;}
+      if(size>GI_LIMIT.entry||(size>=1048576&&comp===0)||(size>=1048576&&size/comp>200))giFail("ZIP_BOMB","entry expansion limit");total+=size;if(total>GI_LIMIT.total)giFail("ZIP_BOMB","archive expansion limit");
+      const z={name:cn.name,dir:cn.dir,flags,method,crc,comp,size,off,raw};entries.push(z);names.set(cn.name,z);p+=46+nl+xl+cl; }
+    if(p!==e)giFail("ZIP_CENTRAL","central count mismatch");const sorted=entries.slice().sort((a,c)=>a.off-c.off);for(let i=0;i<sorted.length;i++){const z=sorted[i],o=z.off;if(o+30>b.length||u32(o)!==0x04034b50)giFail("ZIP_LOCAL","bad local header");const fl=u16(o+6),m=u16(o+8),lc=u32(o+14),lcomp=u32(o+18),lsize=u32(o+22),nl=u16(o+26),xl=u16(o+28);if(o+30+nl+xl>b.length)giFail("ZIP_RANGE","truncated local entry");if(fl!==z.flags||m!==z.method||nl!==z.raw.length)giFail("ZIP_LOCAL","local/central mismatch");for(let j=0;j<nl;j++)if(b[o+30+j]!==z.raw[j])giFail("ZIP_LOCAL","local filename mismatch");for(let x=o+30+nl;x<o+30+nl+xl;){if(x+4>o+30+nl+xl)giFail("ZIP_EXTRA","bad local extra field");const id=u16(x),len=u16(x+2);if(x+4+len>o+30+nl+xl)giFail("ZIP_EXTRA","bad local extra field");if(id===1)giFail("ZIP64","ZIP64 local extra unsupported");x+=4+len;}
+      if(!(fl&8)){if(lc!==z.crc||lcomp!==z.comp||lsize!==z.size)giFail("ZIP_LOCAL","local sizes mismatch");}else{const zero=lc===0&&lcomp===0&&lsize===0,eq=lc===z.crc&&lcomp===z.comp&&lsize===z.size;if(!zero&&!eq)giFail("ZIP_LOCAL","mixed descriptor fields");}
+      const data=o+30+nl+xl;if(data+z.comp>b.length)giFail("ZIP_RANGE","entry outside archive");let end=data+z.comp;if(fl&8){if(end+12>b.length)giFail("ZIP_DESCRIPTOR","truncated descriptor");const sig=u32(end)===0x08074b50;if(sig&&end+16>b.length)giFail("ZIP_DESCRIPTOR","truncated descriptor");let q=end+(sig?4:0);if(u32(q)!==z.crc||u32(q+4)!==z.comp||u32(q+8)!==z.size)giFail("ZIP_DESCRIPTOR","bad descriptor");end+=sig?16:12;}z.data=data;z.end=end;
+      const expected=i+1<sorted.length?sorted[i+1].off:co;if(end!==expected)giFail("ZIP_GAP","local record gap or overlap"); }
+    const mt=names.get("mimetype");if(!mt||mt.off!==0||mt.method!==0||(mt.flags&8)||mt.name!=="mimetype")giFail("EPUB_MIMETYPE","invalid first mimetype entry");const mx=u16(mt.off+28);if(mx!==0)giFail("EPUB_MIMETYPE","mimetype extra field");const mb=b.subarray(mt.data,mt.data+mt.comp),want=new TextEncoder().encode("application/epub+zip");if(mb.length!==want.length||mb.some((x,i)=>x!==want[i])||crc32(mb)!==mt.crc)giFail("EPUB_MIMETYPE","wrong mimetype");return {bytes:b,entries,names}; }
+  function giCurrent(checkCurrent){if(checkCurrent)checkCurrent();}
+  async function readZipEntry(zip,z,actual,checkCurrent){ if(z.dir)giFail("ZIP_ENTRY","directory is not content");giCurrent(checkCurrent);let out;if(z.method===0)out=zip.bytes.slice(z.data,z.data+z.comp);else{let ds;try{ds=new DecompressionStream("deflate-raw");}catch(e){giFail("CAPABILITY","raw deflate unsupported");}const rd=new Blob([zip.bytes.slice(z.data,z.data+z.comp)]).stream().pipeThrough(ds).getReader(),chunks=[];let n=0;for(;;){const x=await rd.read();try{giCurrent(checkCurrent);}catch(e){try{await rd.cancel();}catch(x){}throw e;}if(x.done)break;n+=x.value.length;if(n>z.size||n>GI_LIMIT.entry||(actual&&actual.n+n>GI_LIMIT.total)){try{await rd.cancel();}catch(e){}giFail("ZIP_BOMB","actual expansion limit");}chunks.push(x.value);}out=new Uint8Array(n);let p=0;for(const x of chunks){out.set(x,p);p+=x.length;}}
+    if(out.length!==z.size||crc32(out)!==z.crc)giFail("ZIP_CRC","entry integrity mismatch");if(actual)actual.n+=out.length;return out; }
+  function decodeXmlBytes(input){const b=asBytes(input);if(b.byteLength>GI_LIMIT.xml)giFail("LIMIT","XML resource too large");const d=decodeGenericText(b),s=d.text;let decl="";if(s.startsWith("<?xml")){const q=s.indexOf("?>");if(q<0)giFail("XML_DECL","unterminated declaration");decl=s.slice(5,q);}
+    const attrs=new Map();let i=0;while(i<decl.length){while(/\s/.test(decl[i]||""))i++;if(i>=decl.length)break;let a=i;while(/[A-Za-z_:.-]/.test(decl[i]||""))i++;const k=decl.slice(a,i);while(/\s/.test(decl[i]||""))i++;if(!k||decl[i++]!== "=")giFail("XML_DECL","bad declaration");while(/\s/.test(decl[i]||""))i++;const quote=decl[i++];if(quote!=="\""&&quote!=="'")giFail("XML_DECL","bad declaration");const e=decl.indexOf(quote,i);if(e<0||attrs.has(k))giFail("XML_DECL","bad declaration");attrs.set(k,decl.slice(i,e));i=e+1;}
+    const enc=attrs.get("encoding");if(enc){const x=enc.toUpperCase();if(d.encoding==="utf-8"&&x!=="UTF-8")giFail("XML_ENCODING","encoding conflict");if(d.encoding==="utf-16le"&&x!=="UTF-16"&&x!=="UTF-16LE")giFail("XML_ENCODING","encoding conflict");if(d.encoding==="utf-16be"&&x!=="UTF-16"&&x!=="UTF-16BE")giFail("XML_ENCODING","encoding conflict");}if(!d.bom&&enc&&enc.toUpperCase().startsWith("UTF-16"))giFail("XML_ENCODING","UTF-16 requires BOM");return s; }
+  function checkXmlDoctype(s,allowHtml){let i=0,count=0;while(i<s.length){if(s.startsWith("<!--",i)){const e=s.indexOf("-->",i+4);if(e<0||s.slice(i+4,e).includes("--"))giFail("XML_LEX","bad comment");i=e+3;continue;}if(s.startsWith("<![CDATA[",i)){const e=s.indexOf("]]>",i+9);if(e<0)giFail("XML_LEX","bad CDATA");i=e+3;continue;}if(s.startsWith("<?",i)){const e=s.indexOf("?>",i+2);if(e<0)giFail("XML_LEX","bad processing instruction");i=e+2;continue;}if(s.startsWith("<!",i)){let q=i+2,quote="";for(;q<s.length;q++){const c=s[q];if(quote){if(c===quote)quote="";}else if(c==="\""||c==="'")quote=c;else if(c===">")break;}if(q>=s.length)giFail("XML_LEX","unterminated declaration");const body=s.slice(i+2,q).trim(),low=body.toLowerCase();if(low.startsWith("doctype")){count++;if(!allowHtml||low!=="doctype html"||count>1)giFail("XML_DOCTYPE","unsupported DOCTYPE");}i=q+1;continue;}i++;}}
+  function parseXmlBytes(input,kind){const s=decodeXmlBytes(input);checkXmlDoctype(s,kind==="xhtml");let x;try{x=new DOMParser().parseFromString(s,"application/xml");}catch(e){giFail("XML_PARSE","XML parser failed");}if(x.getElementsByTagName("parsererror").length)giFail("XML_PARSE","malformed XML");return x;}
+  function rejectXmlBase(x){for(const e of x.getElementsByTagName("*"))if((e.getAttributeNS(GI_NS.xml,"base")||"").trim())giFail("XML_BASE","xml:base unsupported");}
+  function resolveHref(base,href){const hashes=(href.match(/#/g)||[]).length;if(hashes>1)giFail("HREF","multiple fragments");let path=href,frag=null;if(hashes){const p=href.indexOf("#");path=href.slice(0,p);frag=href.slice(p+1);if(!frag)giFail("HREF","empty fragment");}
+    if(path.includes("?")||path.includes("\\")||path.includes("\0")||path.startsWith("/")||path.startsWith("//")||/^[A-Za-z][A-Za-z0-9+.-]*:/.test(path))giFail("HREF","unsafe href");if(!path&&!frag)giFail("HREF","empty href");if(/%(?:2f|5c|00)/i.test(path))giFail("HREF","encoded separator");
+    let decoded="";try{decoded=path.split("/").map(decodeURIComponent).join("/").normalize("NFC");if(frag!=null)frag=decodeURIComponent(frag).normalize("NFC");}catch(e){giFail("HREF","invalid percent encoding");}
+    const parts=path?base.split("/").slice(0,-1):base.split("/");if(path)for(const c of decoded.split("/")){if(!c||c===".")continue;if(c===".."){if(!parts.length)giFail("HREF","root escape");parts.pop();}else parts.push(c);}return {path:parts.join("/"),fragment:frag}; }
+  function localNameRoot(x,ns,name){const r=x.documentElement;if(!r||r.namespaceURI!==ns||r.localName!==name)giFail("XML_ROOT","wrong XML root");return r;}
+  function directNs(parent,ns,name){return [...parent.children].filter(e=>e.namespaceURI===ns&&e.localName===name);}
+  function epubTextBlocks(x,path){localNameRoot(x,GI_NS.xhtml,"html");const bodies=x.getElementsByTagNameNS(GI_NS.xhtml,"body");if(bodies.length!==1)giFail("XHTML_BODY","missing body");const body=bodies[0],removed=new Set(["head","script","style","noscript","template","audio","video","canvas","svg","math","object","embed","form","input","button","select","textarea"]),cands=new Set(["h1","h2","h3","h4","h5","h6","p","li","blockquote","pre","dt","dd","figcaption"]),order=new Map(),els=[];let oi=0;(function mark(n){if(n.nodeType===1){order.set(n,oi++);els.push(n);for(const c of n.children)mark(c);}})(body);
+    const blocks=[];function collect(n){if(n.nodeType===3)return n.nodeValue||"";if(n.nodeType!==1||removed.has(n.localName))return "";if(n.localName==="br")return " ";let s="";for(const c of n.childNodes)s+=collect(c);return s;}
+    function walk(n){let loose="";const flush=()=>{const t=collapseText(loose);if(t)blocks.push({text:t,kind:"prose",resourcePath:path,start:order.get(n)||0,end:order.get(n)||0});loose="";};for(const c of n.childNodes){if(c.nodeType===3){loose+=c.nodeValue||"";continue;}if(c.nodeType!==1||removed.has(c.localName))continue;if(cands.has(c.localName)){flush();const t=collapseText(collect(c));if(t)blocks.push({text:t,kind:/^h[1-6]$/.test(c.localName)?"heading":c.localName==="li"?"list":c.localName==="blockquote"?"quote":c.localName==="pre"?"code":"prose",resourcePath:path,start:order.get(c),end:Math.max(...[c,...c.getElementsByTagName("*")].map(e=>order.get(e)||0))});}else{flush();walk(c);}}flush();}walk(body);
+    const owners=new Map(),anchors=[];for(const e of els){const ids=[e.getAttribute("id"),e.getAttributeNS(GI_NS.xml,"id")].filter(x=>x&&x.trim()).map(x=>x.normalize("NFC"));for(const id of new Set(ids)){if(owners.has(id)&&owners.get(id)!==e)giFail("ANCHOR","duplicate anchor");if(owners.has(id))continue;owners.set(id,e);let bi=blocks.findIndex(b=>order.get(e)>=b.start&&order.get(e)<=b.end);if(bi<0)bi=blocks.findIndex(b=>b.start>=order.get(e));anchors.push({id,blockIndex:bi});}}
+    return {blocks,anchors}; }
+  function containerDomModel(x){rejectXmlBase(x);const root=localNameRoot(x,GI_NS.ocf,"container"),groups=directNs(root,GI_NS.ocf,"rootfiles");if(groups.length!==1)giFail("EPUB_CONTAINER","container requires direct rootfiles");return {rootfiles:directNs(groups[0],GI_NS.ocf,"rootfile").map(e=>({mediaType:e.getAttribute("media-type")||"",fullPath:e.getAttribute("full-path")||""}))};}
+  function opfDomModel(x){rejectXmlBase(x);const pkg=localNameRoot(x,GI_NS.opf,"package"),manifests=directNs(pkg,GI_NS.opf,"manifest"),spines=directNs(pkg,GI_NS.opf,"spine");if(manifests.length!==1||spines.length!==1)giFail("EPUB_PACKAGE","package requires direct manifest and spine");const metadata=directNs(pkg,GI_NS.opf,"metadata"),titles=[],metas=[];for(const md of metadata){for(const e of md.getElementsByTagNameNS(GI_NS.dc,"title"))titles.push(e.textContent||"");for(const e of md.getElementsByTagNameNS(GI_NS.opf,"meta"))metas.push({property:e.getAttribute("property")||"",text:e.textContent||""});}return {version:pkg.getAttribute("version")||"",titles,metas,items:directNs(manifests[0],GI_NS.opf,"item").map(e=>({id:e.getAttribute("id")||"",href:e.getAttribute("href")||"",media:e.getAttribute("media-type")||"",properties:e.getAttribute("properties")||"",fallback:e.hasAttribute("fallback")})),spine:directNs(spines[0],GI_NS.opf,"itemref").map(e=>({idref:e.getAttribute("idref")||"",linear:e.getAttribute("linear")||""}))};}
+  function navDomModel(x){rejectXmlBase(x);localNameRoot(x,GI_NS.xhtml,"html");const toc=[...x.getElementsByTagNameNS(GI_NS.xhtml,"nav")].find(e=>(e.getAttributeNS(GI_NS.epub,"type")||"").split(/\s+/).includes("toc"));if(!toc)giFail("EPUB_NAV","missing TOC nav");const candidates=[];for(const li of toc.getElementsByTagNameNS(GI_NS.xhtml,"li")){const a=[...li.children].find(e=>e.namespaceURI===GI_NS.xhtml&&e.localName==="a");if(!a)continue;const label=collapseText(a.textContent||""),href=a.getAttribute("href")||"";if(label&&href)candidates.push({label,href});}return {toc:true,candidates};}
+  function selectOpfPath(model,hasEntry){const rf=(model.rootfiles||[]).find(r=>r.mediaType==="application/oebps-package+xml");if(!rf)giFail("EPUB_CONTAINER","no OPF rootfile");if(!rf.fullPath.trim())giFail("EPUB_CONTAINER","blank OPF rootfile");const r=resolveHref("root",rf.fullPath);if(r.fragment)giFail("EPUB_CONTAINER","rootfile fragment unsupported");if(!hasEntry(r.path))giFail("EPUB_RESOURCE","missing "+r.path);return r.path;}
+  function assembleOpfModel(model,op,name,hasEntry){const ver=(model.version||"").trim();if(!(ver==="3"||(/^3\.\d+$/.test(ver))))giFail("EPUB_VERSION","EPUB 3 required");if((model.metas||[]).some(m=>(m.property||"").trim()==="rendition:layout"&&collapseText(m.text||"")==="pre-paginated"))giFail("EPUB_SPINE","fixed-layout package unsupported");const manifest=new Map(),resources=new Set();let nav=null;for(const it of model.items||[]){const id=it.id,href=it.href,media=it.media,props=(it.properties||"").trim().split(/\s+/).filter(Boolean);if(!id||!id.trim()||manifest.has(id))giFail("EPUB_MANIFEST","duplicate or blank manifest id");if(!href||!href.trim())giFail("EPUB_MANIFEST","blank manifest href");if(it.fallback)giFail("EPUB_FALLBACK","fallback unsupported");if(props.includes("scripted"))giFail("EPUB_MANIFEST","scripted resource unsupported");const r=resolveHref(op,href);if(r.fragment)giFail("EPUB_MANIFEST","manifest fragment unsupported");if(!hasEntry(r.path))giFail("EPUB_RESOURCE","missing "+r.path);if(resources.has(r.path))giFail("EPUB_MANIFEST","duplicate resource");resources.add(r.path);const m={id,path:r.path,media,props};manifest.set(id,m);if(props.includes("nav")){if(nav)giFail("EPUB_NAV","multiple nav items");nav=m;}}
+    if(!nav||nav.media!=="application/xhtml+xml")giFail("EPUB_NAV","missing EPUB 3 nav");const spine=[],seen=new Set(),warnings=[];for(const ir of model.spine||[]){const id=ir.idref,m=manifest.get(id);if(!m)giFail("EPUB_SPINE","missing idref");if(seen.has(id))giFail("EPUB_SPINE","duplicate idref");seen.add(id);if(ir.linear.trim()==="no"){warnings.push("skipped non-linear spine item");continue;}if(m.media!=="application/xhtml+xml"||m.props.includes("rendition:layout-pre-paginated")||m.props.includes("scripted"))giFail("EPUB_SPINE","unsupported spine item");spine.push(m);}if(!spine.length)giFail("EPUB_SPINE","empty linear spine");return {title:(model.titles||[]).map(collapseText).find(Boolean)||genericTitle(name,"epub"),nav,spine,warnings};}
+  function assembleEpubBook(pkg,resourceModels,navModel){const blocks=[],byPath=new Map(),warnings=pkg.warnings.slice();for(const m of pkg.spine){const ex=resourceModels.get(m.path);if(!ex)giFail("EPUB_RESOURCE","missing parsed "+m.path);const base=blocks.length;for(const b of ex.blocks||[])blocks.push(Object.assign({},b,{resourcePath:m.path}));const anchors=new Map();for(const a of ex.anchors||[]){if(anchors.has(a.id))giFail("ANCHOR","duplicate anchor");anchors.set(a.id,a.blockIndex<0?-1:base+a.blockIndex);}byPath.set(m.path,{first:(ex.blocks||[]).length?base:-1,anchors});}if(!blocks.length)giFail("EMPTY","spine contains no prose");if(!navModel||navModel.toc!==true)giFail("EPUB_NAV","missing TOC nav");const chapterCandidates=[];for(const c of navModel.candidates||[]){const href=c.href,label=collapseText(c.label||"");if(!label||!href)continue;if(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)||href.startsWith("//")){warnings.push("ignored external TOC link");continue;}const r=resolveHref(pkg.nav.path,href),target=byPath.get(r.path);if(!target){warnings.push("ignored non-linear TOC link");continue;}const bi=r.fragment==null?target.first:target.anchors.get(r.fragment);if(bi==null||bi<0){warnings.push("ignored unresolved TOC link");continue;}chapterCandidates.push({title:label,resourcePath:r.path,blockIndex:bi});}if(!chapterCandidates.length)warnings.push("navigation has no usable chapters");return {title:pkg.title,blocks,chapterCandidates,warnings};}
+  async function epubBook(input,name,checkCurrent){const zip=parseZip(input),actual={n:0},cache=new Map(),hasEntry=path=>{const z=zip.names.get(path);return !!z&&!z.dir;},get=async(path)=>{giCurrent(checkCurrent);const z=zip.names.get(path);if(!z||z.dir)giFail("EPUB_RESOURCE","missing "+path);if(!cache.has(path))cache.set(path,readZipEntry(zip,z,actual,checkCurrent));try{const out=await cache.get(path);giCurrent(checkCurrent);return out;}catch(e){cache.delete(path);throw e;}};
+    const cx=parseXmlBytes(await get("META-INF/container.xml"),"container");giCurrent(checkCurrent);const op=selectOpfPath(containerDomModel(cx),hasEntry),ox=parseXmlBytes(await get(op),"opf");giCurrent(checkCurrent);const pkg=assembleOpfModel(opfDomModel(ox),op,name,hasEntry),resources=new Map();for(const m of pkg.spine){const x=parseXmlBytes(await get(m.path),"xhtml");giCurrent(checkCurrent);rejectXmlBase(x);resources.set(m.path,epubTextBlocks(x,m.path));}const nx=parseXmlBytes(await get(pkg.nav.path),"xhtml");giCurrent(checkCurrent);const book=assembleEpubBook(pkg,resources,navDomModel(nx));giCurrent(checkCurrent);return book;}
+  async function genericDocFromBytes(input,name,checkCurrent){const b=asBytes(input);if(b.length>GI_LIMIT.file)giFail("LIMIT","selected file is too large");giCurrent(checkCurrent);const f=genericFormat(name);if(!f)giFail("FORMAT","unsupported file extension");const book=f==="txt"?txtBook(b,name):f==="md"?markdownBook(b,name):await epubBook(b,name,checkCurrent);giCurrent(checkCurrent);return {format:f,doc:projectGeneric(book),warnings:book.warnings||[]}; }
+  // GENERIC_INGEST_END
 
   // ---------- render ----------
   function build(){
@@ -401,12 +532,12 @@
   }
   function relayoutPaged(){                          // re-measure + keep the current place on screen
     if(!(paged && readerReady())) return;
-    const i=(audio.paused && readingSeg>=0) ? readingSeg : (curSeg>=0?curSeg:0);
+    const i=((mode==="text"||audio.paused) && readingSeg>=0) ? readingSeg : (curSeg>=0?curSeg:0);
     buildPagesPaged(); const p=pageOf(i); setPage(p); goToCol(p,false);
   }
   function setMode(m){
     const p=(m==="paged"); if(p===paged) return;
-    const i=(audio.paused && readingSeg>=0) ? readingSeg : (curSeg>=0?curSeg:0);   // remember the place across the switch
+    const i=((mode==="text"||audio.paused) && readingSeg>=0) ? readingSeg : (curSeg>=0?curSeg:0);   // remember the place across the switch
     paged=p; try{ localStorage.setItem(MODE_KEY,m); }catch(e){}
     const rd=$("#reader"); syncReaderMode();
     const sb=rd.style.scrollBehavior; rd.style.scrollBehavior="auto"; rd.scrollLeft=0; rd.scrollTop=0; rd.style.scrollBehavior=sb;
@@ -423,14 +554,14 @@
   }
   function onReaderScroll(){
     userScrollPause=Date.now()+2500;        // suspend playback auto-follow briefly (unchanged)
-    if(!audio.paused) return;               // only the paused reader feeds the cursor
+    if(mode!=="text"&&!audio.paused) return;               // only text / paused reader feeds the cursor
     clearTimeout(scrollT); scrollT=setTimeout(captureReadingPos,160);
   }
   function captureReadingPos(){
     if(paged) return;                       // paged mode: the reading place comes from turnPage, not vertical scroll
     // capture only on a real reader gesture made *after* the pause — so neither the cold-open
     // restore scroll nor a follow/seek scroll still settling from before the pause can hijack it.
-    if(!audio.paused || lastUserInput<=pausedAt) return;
+    if((mode!=="text"&&!audio.paused) || (mode!=="text"&&lastUserInput<=pausedAt)) return;
     const i=segAtAnchor();
     if(i<0 || i>=segs.length) return;
     readingSeg=i; setPage(pageOf(i)); save();
@@ -441,16 +572,20 @@
     const target=Math.max(0,Math.min(pages.length-1,(curPage<0?0:curPage)+dir));
     if(paged){                                       // slide horizontally to the target column
       goToCol(target,true);
-      if(audio.paused){ readingSeg=pageSeg[target]; save(); }
+      if(mode==="text"||audio.paused){ readingSeg=pageSeg[target]; save(); }
       setPage(target); return;
     }
     const el=segEls[pages[target].seg]; if(!el) return;
     $("#reader").scrollTo({top:Math.max(0,el.offsetTop-12), behavior:"smooth"});
-    if(audio.paused){ readingSeg=pages[target].seg; save(); }
+    if(mode==="text"||audio.paused){ readingSeg=pages[target].seg; save(); }
     setPage(target);
   }
 
   function onTap(e){
+    if(mode==="text"){
+      const ch=e.target.closest(".chap"); if(ch) navigateTextSeg(chapters[+ch.dataset.ci].seg,false,true);
+      return;
+    }
     const w=e.target.closest(".w");
     if(w){ seekTo(parseFloat(w.dataset.s)); return; }
     const ch=e.target.closest(".chap");
@@ -458,7 +593,13 @@
     const sg=e.target.closest(".seg");
     if(sg){ seekTo(segs[+sg.dataset.i].start); }
   }
-  function seekTo(t){ audio.currentTime=t+0.001; if(audio.paused) audio.play(); }
+  function seekTo(t){ if(mode==="text")return;audio.currentTime=t+0.001; if(audio.paused) audio.play(); }
+  function navigateTextSeg(i,smooth,doSave){
+    if(mode!=="text"||!segs.length) return; i=Math.max(0,Math.min(segs.length-1,Number.isInteger(i)?i:0));
+    readingSeg=i; curSeg=-1; setSeg(i); setChap(segs[i].start); const p=pageOf(i); setPage(p);
+    if(paged) goToCol(p,!!smooth); else {const e=segEls[i];if(e)$("#reader").scrollTo({top:Math.max(0,e.offsetTop-12),behavior:smooth?"smooth":"auto"});}
+    if(doSave) save(true);
+  }
 
   // ---------- highlight ----------
   function findSeg(t){
@@ -529,6 +670,7 @@
     if(sheetKind==="chapters") markCurrentChapter();
   }
   function tick(){
+    if(mode==="text")return;
     const t=audio.currentTime;
     setSeg(findSeg(t)); setWord(t); setChap(t);
     $("#seek").value = audio.duration? (t/audio.duration*1000):0;
@@ -539,7 +681,7 @@
 
   // ---------- Media Session (lock screen / headset) ----------
   function setupMediaSession(){
-    if(!("mediaSession" in navigator)) return;
+    if(mode==="text"||!("mediaSession" in navigator)) return;
     const ms=navigator.mediaSession;
     const set=(a,fn)=>{ try{ ms.setActionHandler(a,fn); }catch(e){} };
     set("play",()=>resumePlay());
@@ -551,14 +693,14 @@
     set("nexttrack",()=>{ if(playlist) nextTrack(); else jumpChapter(1); });
   }
   function updateMetadata(){
-    if(!("mediaSession" in navigator) || !("MediaMetadata" in window) || !doc) return;
+    if(mode==="text"||!("mediaSession" in navigator) || !("MediaMetadata" in window) || !doc) return;
     const ch=(curChap>=0 && chapters[curChap]) ? chapters[curChap] : null;
     try{ navigator.mediaSession.metadata=new MediaMetadata({
       title: ch ? ch.title : (doc.title||"Inn Reader"),
       artist: doc.title||"Inn Reader", album:"Inn Reader" }); }catch(e){}
   }
   function updatePosition(){
-    if(!("mediaSession" in navigator) || !navigator.mediaSession.setPositionState) return;
+    if(mode==="text"||!("mediaSession" in navigator) || !navigator.mediaSession.setPositionState) return;
     if(!audio.duration || !isFinite(audio.duration)) return;
     try{ navigator.mediaSession.setPositionState({ duration:audio.duration,
       playbackRate:audio.playbackRate||1, position:Math.min(audio.currentTime,audio.duration) }); }catch(e){}
@@ -577,6 +719,10 @@
   }
   // whole-book chapter skip: crosses tracks via globalChaps (single-file falls back to jumpChapter)
   function skipChapter(dir){
+    if(mode==="text"){
+      if(!chapters.length)return;let base=curChap<0?0:curChap,target=Math.max(0,Math.min(chapters.length-1,base+dir));
+      navigateTextSeg(chapters[target].seg,false,true);return;
+    }
     if(!(playlist && playlist.globalChaps && playlist.globalChaps.length)) return jumpChapter(dir);
     const gc=playlist.globalChaps, ti=playlist.idx, t=audio.currentTime;
     let cur=-1;                                  // current chapter = last one at/before (track, time); gc is track-ordered
@@ -596,11 +742,12 @@
   // One canonical position per doc: {t} for listening precision, {seg} for the reading place.
   // While paused with the reader scrolled ahead, `seg` is the furthest point and wins on restore.
   let lastSave=0;
-  function posSeg(){ return (audio.paused && readingSeg>=0) ? readingSeg : curSeg; }
-  function save(){ const n=Date.now(); if(n-lastSave<1500) return; lastSave=n;
-    try{ localStorage.setItem(posKey(), JSON.stringify({t:audio.currentTime, seg:posSeg()})); }catch(e){}
+  function posSeg(){ return ((mode==="text"||audio.paused) && readingSeg>=0) ? readingSeg : curSeg; }
+  function save(force){ if(!positionReady)return;const n=Date.now(); if(!force&&n-lastSave<1500) return; lastSave=n;
+    try{ localStorage.setItem(posKey(), JSON.stringify(mode==="text"?{seg:Math.max(0,posSeg())}:{t:audio.currentTime, seg:posSeg()})); }catch(e){}
     if(playlist) savePlaylistPos(); }
   function restore(){
+    if(mode==="text"){try{const raw=localStorage.getItem(posKey());if(raw){const o=JSON.parse(raw);if(Number.isInteger(o.seg))readingSeg=Math.max(0,Math.min(segs.length-1,o.seg));}}catch(e){}return;}
     try{
       const raw=localStorage.getItem(posKey()); if(!raw) return;
       let t=NaN, seg=-1;
@@ -619,26 +766,37 @@
     r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
   function idbSet(k,v){ return idb().then(db=>new Promise((res,rej)=>{
     const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(v,k);
-    tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); })); }
+    tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); tx.onabort=()=>rej(tx.error||new Error("aborted")); })); }
   function idbGet(k){ return idb().then(db=>new Promise((res,rej)=>{
     const tx=db.transaction(STORE,"readonly"); const rq=tx.objectStore(STORE).get(k);
     rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error); })); }
 
-  function saveSession(){
+  function saveSession(token){
     if(isDemo || !doc) return;
-    const base={ doc, audioName:(pendingAudioFile?pendingAudioFile.name:""), savedAt:Date.now() };
+    const writeMode=mode,hasAudio=!!pendingAudioFile;
+    const base={ doc, mode:writeMode, identity:sourceIdentity, format:currentFormat,
+      reimportStable:writeMode==="text"?sourceIdentityStable:true,
+      audioName:(pendingAudioFile?pendingAudioFile.name:""), savedAt:Date.now() };
     const full = pendingAudioFile ? Object.assign({audioBlob:pendingAudioFile}, base) : base;
-    idbSet("last", full).catch(()=>idbSet("last", base).catch(()=>{}));  // quota → keep text-only
+    sessionWriteQueue=sessionWriteQueue.then(()=>{
+      if(writeMode==="text"&&token!==loadEpoch)return;
+      return idbSet("last",full).catch(e=>{if(writeMode==="audio"&&hasAudio)return idbSet("last",base);throw e;});
+    }).catch(()=>{toast("Opened, but resume was not saved");});
+    return sessionWriteQueue;
   }
   function checkResume(){
     idbGet("last").then(rec=>{
       if(!rec || !rec.doc) return;
-      const btn=$("#resumeBtn"); $("#resumeName").textContent=rec.doc.title||"last session";
+      const btn=$("#resumeBtn"); $("#resumeName").textContent=(rec.doc.title||"last session")+(rec.mode==="text"&&rec.reimportStable===false?" · session-only identity":"");
       btn.style.display="flex";
       btn.onclick=()=>{
+        if(rec.mode==="text"){
+          const token=++loadEpoch;++loadToken;openTextDoc(rec.doc,rec.identity||("ephemeral:"+Date.now()),rec.format||"txt",[],token,true,rec.reimportStable!==false);return;
+        }
+        mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++loadEpoch;++loadToken;
         doc=rec.doc;
         if(rec.audioBlob){ isDemo=false; pendingAudioFile=rec.audioBlob;   // keep the blob persisted on re-save
-          audio.src=URL.createObjectURL(rec.audioBlob); open(); }
+          if(singleAudioObjUrl)URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=URL.createObjectURL(rec.audioBlob);audio.src=singleAudioObjUrl;open(); }
         else {            // text-only resume: pre-load sync, ask for just the audio file
           haveSync=true; $("#syncCk").textContent="●"; $("#syncName").textContent=doc.title;
           $("#audioName").textContent="re-select: "+(rec.audioName||"your audio file");
@@ -666,10 +824,10 @@
   function toggleWake(){ keepAwake=!keepAwake; try{ localStorage.setItem(WAKE_KEY, keepAwake?"1":"0"); }catch(e){}
     if(keepAwake && !audio.paused) acquireWake(); else releaseWake();
     if(sheetKind==="settings") renderSettings(); }
-  document.addEventListener("visibilitychange",()=>{ if(!document.hidden && !audio.paused) acquireWake(); });
+  document.addEventListener("visibilitychange",()=>{ if(mode!=="text"&&!document.hidden && !audio.paused) acquireWake(); });
 
   // ---------- flush the saved position when leaving (throttle would otherwise drop the last move) ----------
-  function flushSave(){ if(!doc) return; lastSave=0; save(); }
+  function flushSave(){ if(!doc) return; save(true); }
   window.addEventListener("pagehide", flushSave);
   document.addEventListener("visibilitychange",()=>{ if(document.hidden) flushSave(); });
 
@@ -698,37 +856,38 @@
   // ---------- transport ----------
   // The read->listen handoff: if you read ahead while paused, play continues from the reading place.
   function resumePlay(){
+    if(mode==="text")return;
     if(readingSeg>=0 && segs[readingSeg] && readingSeg!==findSeg(audio.currentTime))
       audio.currentTime=segs[readingSeg].start+0.001;
     readingSeg=-1;
     audio.play();
   }
-  $("#play").onclick=()=>{ if(audio.paused){resumePlay();} else {audio.pause();} };
-  $("#back").onclick=()=>{ audio.currentTime=Math.max(0,audio.currentTime-15); };
-  $("#fwd").onclick =()=>{ audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+15); };
+  $("#play").onclick=()=>{ if(mode==="text")return;if(audio.paused){resumePlay();} else {audio.pause();} };
+  $("#back").onclick=()=>{ if(mode!=="text")audio.currentTime=Math.max(0,audio.currentTime-15); };
+  $("#fwd").onclick =()=>{ if(mode!=="text")audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+15); };
   $("#prevChap").onclick=()=>skipChapter(-1);
   $("#nextChap").onclick=()=>skipChapter(1);
   const rates=[0.8,1,1.25,1.5,2], RATE_KEY="inn-reader-rate";
   let ri=(()=>{ const v=parseInt(localStorage.getItem(RATE_KEY),10); return (v>=0&&v<rates.length)?v:1; })();
   function applyRate(){ audio.playbackRate=rates[ri]; $("#rate").textContent=rates[ri]+"×";
     try{ localStorage.setItem(RATE_KEY,String(ri)); }catch(e){} }
-  $("#rate").onclick=()=>{ ri=(ri+1)%rates.length; applyRate(); };
-  $("#follow").onclick=()=>{ follow=!follow; $("#follow").classList.toggle("act",follow);
+  $("#rate").onclick=()=>{ if(mode==="text")return;ri=(ri+1)%rates.length; applyRate(); };
+  $("#follow").onclick=()=>{ if(mode==="text")return;follow=!follow; $("#follow").classList.toggle("act",follow);
     if(follow && curSeg>=0){ if(paged) goToCol(pageOf(curSeg),true);
       else if(segEls[curSeg]) segEls[curSeg].scrollIntoView({block:"center",behavior:"smooth"}); } };
-  $("#seek").oninput=e=>{ if(audio.duration){ audio.currentTime=e.target.value/1000*audio.duration; } };
+  $("#seek").oninput=e=>{ if(mode!=="text"&&audio.duration){ audio.currentTime=e.target.value/1000*audio.duration; } };
 
-  audio.addEventListener("play",()=>{ $("#play").textContent="❚❚";
+  audio.addEventListener("play",()=>{ if(mode==="text"){audio.pause();return;}$("#play").textContent="❚❚";
     if("mediaSession" in navigator) navigator.mediaSession.playbackState="playing";
     acquireWake(); cancelAnimationFrame(rafId); rafId=requestAnimationFrame(tick); });
-  audio.addEventListener("pause",()=>{ $("#play").textContent="▶";
+  audio.addEventListener("pause",()=>{ if(mode==="text")return;$("#play").textContent="▶";
     if("mediaSession" in navigator) navigator.mediaSession.playbackState="paused";
     readingSeg=-1; pausedAt=Date.now();  // fresh pause: no divergence until a post-pause reader gesture
     releaseWake(); save(); });
-  audio.addEventListener("seeked",()=>{ const t=audio.currentTime; readingSeg=-1;  // explicit audio move
+  audio.addEventListener("seeked",()=>{ if(mode==="text")return;const t=audio.currentTime; readingSeg=-1;  // explicit audio move
     setSeg(findSeg(t)); setWord(t); setChap(t);
     $("#cur").textContent=fmt(t); updatePosition(); });
-  audio.addEventListener("loadedmetadata",()=>{ $("#dur").textContent=fmt(audio.duration);
+  audio.addEventListener("loadedmetadata",()=>{ if(mode==="text")return;$("#dur").textContent=fmt(audio.duration);
     if(playlist){ let st=Math.min(pendingSeek||0, (audio.duration||1e9)-0.1);
       if(pendingReadSeg>=0 && pendingReadSeg<segs.length && pendingReadSeg!==findSeg(st))
         st=segs[pendingReadSeg].start;                  // reading place differs from the audio -> resume there
@@ -745,8 +904,8 @@
     }
     lastSave=0; save();                // persist the freshly-restored position now (no zeroed pre-seek write)
   });
-  audio.addEventListener("error",()=>{ if(audio.src) toast("Couldn't load that audio file."); });
-  audio.addEventListener("ended",()=>{ if(playlist && playlist.idx+1<playlist.tracks.length) nextTrack(); });
+  audio.addEventListener("error",()=>{ if(mode!=="text"&&audio.src) toast("Couldn't load that audio file."); });
+  audio.addEventListener("ended",()=>{ if(mode!=="text"&&playlist && playlist.idx+1<playlist.tracks.length) nextTrack(); });
 
   // ---------- bottom sheet ----------
   function openSheet(kind){ sheetKind=kind; (kind==="chapters"?renderChapters:renderSettings)();
@@ -776,8 +935,8 @@
     if(!chapters.length){ s.appendChild(el("p",{class:"empty", text:"No chapter markers in this file."})); return; }
     const list=el("div",{class:"clist"});
     chapters.forEach((c,i)=>{
-      const b=el("button",{data:{ci:String(i)}}, [ el("span",{class:"ct", text:fmt(c.start)}), c.title ]);
-      b.onclick=()=>{ seekTo(chapters[i].start); closeSheet(); };
+      const b=el("button",{data:{ci:String(i)}}, [ el("span",{class:"ct", text:mode==="text"?("p"+(pageOf(c.seg)+1)):fmt(c.start)}), c.title ]);
+      b.onclick=()=>{ if(mode==="text")navigateTextSeg(chapters[i].seg,false,true);else seekTo(chapters[i].start);closeSheet(); };
       list.appendChild(b);
     });
     s.appendChild(list); markCurrentChapter();
@@ -794,6 +953,7 @@
     s.appendChild(srow("Reading mode","scroll down, or turn pages",
       [ chip("Scroll", !paged, ()=>setMode("scroll")), chip("Pages", paged, ()=>setMode("paged")) ]));
     s.appendChild(srow("Text size", null, [ chip("A−",false,()=>stepFont(-2)), chip("A+",false,()=>stepFont(2)) ]));
+    if(mode==="text")return;
     s.appendChild(srow("Keep screen on","while playing", [ chip(keepAwake?"On":"Off", keepAwake, toggleWake) ]));
     const sl=[["off","Off"],["15","15m"],["30","30m"],["45","45m"],["chapter","Chapter"]];
     s.appendChild(srow("Sleep timer", sleepMode!=="off"?sleepLabel():null,
@@ -805,9 +965,9 @@
     if(!$("#reader").classList.contains("on")) return;
     const tag=(e.target.tagName||"").toLowerCase();
     if(tag==="input"||tag==="textarea") return;
-    if(e.key===" "){ e.preventDefault(); $("#play").click(); }
-    else if(e.key==="ArrowLeft"){ e.shiftKey ? skipChapter(-1) : $("#back").click(); }
-    else if(e.key==="ArrowRight"){ e.shiftKey ? skipChapter(1) : $("#fwd").click(); }
+    if(e.key===" "){e.preventDefault();if(mode!=="text")$("#play").click();}
+    else if(e.key==="ArrowLeft"){e.preventDefault();if(e.shiftKey)skipChapter(-1);else if(mode!=="text")$("#back").click();}
+    else if(e.key==="ArrowRight"){e.preventDefault();if(e.shiftKey)skipChapter(1);else if(mode!=="text")$("#fwd").click();}
     else if(e.key==="PageDown" && pages.length>1){ e.preventDefault(); turnPage(1); }
     else if(e.key==="PageUp" && pages.length>1){ e.preventDefault(); turnPage(-1); }
     else if(e.key==="Escape" && sheetKind) closeSheet();
@@ -835,7 +995,7 @@
         const pl={book:book||"Book", tracks, idx:0, globalChaps:[]};
         tracks.forEach((t,ti)=>{ if(Array.isArray(t.chapters)) t.chapters.forEach(c=>{
           if(c && typeof c.start==="number") pl.globalChaps.push({title:c.title, trackIdx:ti, start:c.start}); }); });
-        playlist=pl; resolve(tracks.length);
+        resolve(tracks.length?pl:null);
       };
       const pairByNumber=()=>{
         const nos=Object.keys(syncByNo).filter(no=>audioByNo[no]).sort();
@@ -871,23 +1031,24 @@
     return Promise.resolve(curObjUrl=URL.createObjectURL(t.audioFile));
   }
   const trackLabel = t => t.syncFile ? t.syncFile.name : (t.name || ("track "+(t.no||"")));
-  let loadToken=0, curObjUrl=null;
-  function loadTrack(idx, seekT, autoplay){
+  let loadToken=0, curObjUrl=null, singleAudioObjUrl=null;
+  function loadTrack(idx, seekT, autoplay, epoch=loadEpoch){
     if(!playlist || idx<0 || idx>=playlist.tracks.length) return;
     const token=++loadToken;                 // guard against out-of-order async loads
     const t=playlist.tracks[idx]; t._retried=false;   // allow one expired-link retry per load (see audio 'error')
     loadSync(t).then(d=>{
-      if(token!==loadToken) return;           // a newer loadTrack superseded this one
+      if(token!==loadToken||epoch!==loadEpoch) return; // a newer selection/load superseded this one
       const bad=validateDoc(d, trackLabel(t));
       if(bad){ toast("Skipped "+trackLabel(t)+" — malformed sync"); console.warn("validateDoc:", bad); return; }  // leave playlist.idx on the last good track
       playlist.idx=idx;                        // commit position only now the sync is valid — never point idx at a track that didn't load (else save / resume / "▸ N of M" desync)
+      mode="audio";sourceIdentity="";currentFormat="";positionReady=true;
       doc=d; isDemo=false; pendingAudioFile=t.audioFile||null;
       pendingSeek=Math.max(0, seekT||0); pendingAutoplay=!!autoplay;
       build(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
       if(curObjUrl){ URL.revokeObjectURL(curObjUrl); curObjUrl=null; }   // free the previous track's blob URL
       setSeg(0); setChap(0);
-      return trackAudioSrc(t).then(src=>{ if(token===loadToken) audio.src=src; });  // -> loadedmetadata seeks/autoplays
-    }).catch(()=>{ if(token===loadToken) toast("Couldn't load "+trackLabel(t)); });
+      return trackAudioSrc(t).then(src=>{ if(token===loadToken&&epoch===loadEpoch&&mode!=="text")audio.src=src; });  // -> loadedmetadata seeks/autoplays
+    }).catch(()=>{ if(token===loadToken&&epoch===loadEpoch) toast("Couldn't load "+trackLabel(t)); });
   }
   function prevTrack(){ if(playlist) loadTrack(audio.currentTime<3 ? playlist.idx-1 : playlist.idx, 0, true); }
   function nextTrack(){ if(playlist) loadTrack(playlist.idx+1, 0, true); }
@@ -900,14 +1061,17 @@
   function loadPlaylistPos(book){ try{ return JSON.parse(localStorage.getItem(plKey(book))||"null"); }catch(e){ return null; } }
 
   function startBook(files){
-    dbxBook = null;                 // local-folder book -> not synced to Dropbox
-    buildPlaylist(files).then(n=>{
-      if(!n){ toast("No matching track + sync files in that selection."); return; }
+    const epoch=++loadEpoch;++loadToken;
+    buildPlaylist(files).then(pl=>{
+      if(epoch!==loadEpoch)return;
+      if(!pl){ toast("No matching track + sync files in that selection."); return; }
+      mode="audio";sourceIdentity="";currentFormat="";positionReady=true;playlist=pl;
+      dbxBook = null;                 // local-folder book -> not synced to Dropbox
       showReaderUI();
       const saved=loadPlaylistPos(playlist.book);
       const startIdx=(saved && saved.idx>=0 && saved.idx<playlist.tracks.length) ? saved.idx : 0;
       if(saved && typeof saved.seg==="number") pendingReadSeg=saved.seg;   // resume on the page last read
-      loadTrack(startIdx, saved?saved.t:0, false);
+      loadTrack(startIdx, saved?saved.t:0, false, epoch);
       if(saved && (saved.idx>0 || (saved.t||0)>5)) toast("Resumed — track "+(startIdx+1)+" of "+playlist.tracks.length);
       else toast(playlist.tracks.length+" tracks · reads continuously");
     });
@@ -917,29 +1081,48 @@
   let haveAudio=false, haveSync=false;
   function maybeReady(){ if(haveAudio && haveSync) $("#startBtn").style.display="flex"; }
   $("#audioIn").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return;
-    pendingAudioFile=f; isDemo=false; audio.src=URL.createObjectURL(f); haveAudio=true;
+    mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++loadEpoch;++loadToken;
+    pendingAudioFile=f; isDemo=false;if(singleAudioObjUrl)URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=URL.createObjectURL(f);audio.src=singleAudioObjUrl;haveAudio=true;
     $("#audioCk").textContent="●"; $("#audioName").textContent=f.name; maybeReady();
     if(haveSync && doc) open();   // text-only resume path: sync already loaded, just needed audio
   });
   $("#syncIn").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return;
-    const fr=new FileReader(); fr.onload=()=>{ try{ doc=JSON.parse(fr.result); haveSync=true;
+    const epoch=++loadEpoch;++loadToken;const fr=new FileReader(); fr.onload=()=>{if(epoch!==loadEpoch)return;try{doc=JSON.parse(fr.result);haveSync=true;
       $("#syncCk").textContent="●"; $("#syncName").textContent=f.name; maybeReady(); }
       catch(err){ alert("Could not read that JSON: "+err.message); } }; fr.readAsText(f); });
   $("#startBtn").onclick=open;
   $("#bookIn").addEventListener("change",e=>{ const files=e.target.files; if(files && files.length) startBook(files); });
   $("#tryDemo").onclick=()=>{ if(!window.DEMO){ alert("Demo data missing."); return; }
+    mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++loadEpoch;++loadToken;
     isDemo=true; doc=window.DEMO.align; audio.src=window.DEMO.audioDataUri; open(); };
 
+  function clearMediaSession(){if(!("mediaSession" in navigator))return;for(const a of ["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"])try{navigator.mediaSession.setActionHandler(a,null);}catch(e){}try{navigator.mediaSession.setPositionState();}catch(e){}try{navigator.mediaSession.playbackState="none";}catch(e){}try{navigator.mediaSession.metadata=null;}catch(e){}}
+  function teardownAudioForText(){++loadToken;pendingSeek=0;pendingAutoplay=false;sleepMode="off";sleepAt=0;sleepChapterEnd=Infinity;cancelAnimationFrame(rafId);rafId=null;audio.pause();releaseWake();clearMediaSession();if(curObjUrl){URL.revokeObjectURL(curObjUrl);curObjUrl=null;}if(singleAudioObjUrl){URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=null;}audio.removeAttribute("src");try{audio.load();}catch(e){}haveAudio=false;haveSync=false;$("#audioCk").textContent="○";$("#syncCk").textContent="○";$("#startBtn").style.display="none";}
+  function openTextDoc(nextDoc,identity,format,warnings,token,restored,identityStable=true){
+    if(token!==loadEpoch)return false;const bad=validateDoc(nextDoc,"generic "+format);
+    if(bad)giFail("CONTRACT",bad);mode="text";sourceIdentity=identity;sourceIdentityStable=identityStable;currentFormat=format;positionReady=false;
+    playlist=null;dbxBook=null;isDemo=false;pendingAudioFile=null;teardownAudioForText();doc=nextDoc;
+    curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();showReaderUI();
+    let seg=0;try{const raw=localStorage.getItem(posKey());if(raw){const o=JSON.parse(raw);if(Number.isInteger(o.seg))seg=Math.max(0,Math.min(segs.length-1,o.seg));}}catch(e){}
+    navigateTextSeg(seg,false,false);positionReady=true;lastSave=0;saveSession(token);
+    const ws=warnings||[];if(ws.length)toast("Opened with "+ws.length+" warning"+(ws.length===1?"":"s"));else if(!restored)toast("Opened text-only book");return true;
+  }
+  $("#genericIn").addEventListener("change",async e=>{const f=e.target.files[0];if(!f)return;const token=++loadEpoch;++loadToken;const small=$("#genericBtn small"),original=small.textContent,current=()=>{if(token!==loadEpoch)giFail("STALE_IMPORT","import superseded");};small.textContent="Opening locally…";
+    try{if(f.size>GI_LIMIT.file)giFail("LIMIT","selected file is too large");current();const bytes=await f.arrayBuffer();current();const result=await genericDocFromBytes(bytes,f.name,current);current();const identity=await genericIdentityResult(bytes,result.format);current();if(!identity.stable)result.warnings.push("stable content identity unavailable; resume is session-only");openTextDoc(result.doc,identity.identity,result.format,result.warnings,token,false,identity.stable);}
+    catch(err){if(token===loadEpoch){const stage=(err&&err.code)||"IMPORT";alert("This file can't be opened ("+stage+"):\n\n"+genericErrorMessage((err&&err.message)||err));}}
+    finally{if(token===loadEpoch){small.textContent=original;e.target.value="";}}
+  });
+
   function showReaderUI(){
-    applyFont(fontPx()); applyRate(); setupMediaSession();
+    applyFont(fontPx()); if(mode!=="text"){applyRate();setupMediaSession();}
     $("#load").style.display="none";
-    $("#top").classList.add("on"); $("#reader").classList.add("on"); $("#bar").classList.add("on");
+    $("#top").classList.add("on"); $("#reader").classList.add("on"); $("#bar").classList.toggle("on",mode!=="text");
     syncReaderMode(); if(paged && segEls.length) buildPagesPaged();   // reader is now visible -> column geometry is valid
   }
   function open(){            // single-file (or demo / resume) entry
     const bad=validateDoc(doc, isDemo?"demo data":"this read-along file");
     if(bad){ alert("This read-along file can't be played:\n\n"+bad); return; }
-    playlist=null; dbxBook=null;
+    mode="audio";sourceIdentity="";currentFormat="";positionReady=true;playlist=null; dbxBook=null;
     build(); showReaderUI(); updateMetadata();
     setSeg(0); setChap(0);
     saveSession();
@@ -1030,13 +1213,17 @@
   window.addEventListener("pagehide", dbxFlushPos);
 
   audio.addEventListener("error", () => {        // a Dropbox temporary link expired (e.g. paused past ~4h)
+    if(mode==="text")return;
     const t = playlist && playlist.tracks[playlist.idx];
     if(!t || !t.audioPath || t._retried) return;          // only Dropbox-streamed tracks, once per load
     t._retried = true;
-    const at = audio.currentTime || 0, was = !audio.paused;
-    dbxLink(t.audioPath).then(src => { audio.src = src;   // re-resolve a fresh link and resume in place
-      audio.addEventListener("loadedmetadata", function once(){ audio.removeEventListener("loadedmetadata", once);
-        try{ audio.currentTime = at; }catch(e){} if(was) audio.play().catch(()=>{}); }, { once:true });
+    const at=audio.currentTime||0,was=!audio.paused,epoch=loadEpoch,token=loadToken,owner=playlist;
+    dbxLink(t.audioPath).then(src => {
+      if(mode==="text"||epoch!==loadEpoch||token!==loadToken||playlist!==owner)return;
+      audio.addEventListener("loadedmetadata",function once(){audio.removeEventListener("loadedmetadata",once);
+        if(mode==="text"||epoch!==loadEpoch||token!==loadToken||playlist!==owner)return;
+        try{audio.currentTime=at;}catch(e){}if(was)audio.play().catch(()=>{});},{once:true});
+      audio.src=src;   // re-resolve a fresh link and resume in place
     }).catch(()=>{});
   });
 
@@ -1056,12 +1243,14 @@
   }
   async function dbxOpenBook(folder, name){
     try{
+      const epoch=++loadEpoch,current=()=>epoch===loadEpoch;++loadToken;
       dbxMsg("Opening “"+name+"” — fetching links…");
-      const entries = await dbxList(folder), byName = {};
+      const entries=await dbxList(folder);if(!current())return;const byName={};
       entries.forEach(e => { if(e[".tag"]==="file") byName[e.name.toLowerCase()] = e.path_lower; });
       let tracks = [], book = name;
       if(byName["manifest.json"]){
-        const man = await fetch(await dbxLink(byName["manifest.json"])).then(r=>r.json());
+        const manifestUrl=await dbxLink(byName["manifest.json"]);if(!current())return;
+        const man=await fetch(manifestUrl).then(r=>r.json());if(!current())return;
         book = man.book || name;
         for(const t of (man.tracks||[])){
           const ap = byName[(t.audio||"").toLowerCase()], sp = byName[(t.file||"").toLowerCase()];
@@ -1080,13 +1269,13 @@
       const pl = { book: book||"Book", tracks, idx:0, globalChaps:[] };
       tracks.forEach((t,ti)=>{ if(Array.isArray(t.chapters)) t.chapters.forEach(c=>{
         if(c && typeof c.start==="number") pl.globalChaps.push({ title:c.title, trackIdx:ti, start:c.start }); }); });
-      playlist = pl; dbxBook = pl.book; showReaderUI();
-      dbxPosCache = await dbxLoadPositions();              // latest place from ANY of this user's devices
+      const positions=await dbxLoadPositions();if(!current())return; // latest place from ANY of this user's devices
+      mode="audio";sourceIdentity="";currentFormat="";positionReady=true;playlist=pl;dbxBook=pl.book;dbxPosCache=positions;showReaderUI();
       const dP = dbxPosCache[pl.book], lP = loadPlaylistPos(pl.book);
       const saved = (dP && (!lP || (dP.ts||0) >= (lP.ts||0))) ? dP : lP;   // resume at the newer of Dropbox vs local
       const startIdx = (saved && saved.idx>=0 && saved.idx<tracks.length) ? saved.idx : 0;
       if(saved && typeof saved.seg==="number") pendingReadSeg = saved.seg;
-      loadTrack(startIdx, saved?saved.t:0, false);
+      loadTrack(startIdx, saved?saved.t:0, false, epoch);
       toast(tracks.length+" tracks · streaming from Dropbox" + (dP ? " · resumed your place" : ""));
     }catch(e){ dbxMsg("Couldn't open “"+name+"”: "+e.message); }
   }

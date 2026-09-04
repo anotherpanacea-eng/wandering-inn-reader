@@ -13,34 +13,40 @@ set -e
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
+PYTHON="${PYTHON:-python3}"
 
 echo "→ IP-limit guard (≤20s voice / ≤500 words text, no bulk artifacts)"
-python3 tools/check_ip_limits.py
+"$PYTHON" tools/check_ip_limits.py
 
 echo "→ safe-pattern lint (no HTML-string DOM / parenthesised eval-mode call)"
-python3 tools/check_safe_patterns.py
+"$PYTHON" tools/check_safe_patterns.py
 
 echo "→ byte-compile pipeline + tools + tests"
-python3 -m py_compile pipeline/*.py tools/*.py tests/*.py
+"$PYTHON" -m py_compile pipeline/*.py tools/*.py tests/*.py
 
 echo "→ align.py data-contract test"
-python3 tests/test_align.py
+"$PYTHON" tests/test_align.py
 
 echo "→ edit-aware aligner cut-detection / gap-emit test (synthetic, no GPU)"
-python3 tests/test_editaware.py
+"$PYTHON" tests/test_editaware.py
 echo "→ opt-in fuzzy ASR overlap boundary/default-off test"
-python3 tests/test_fuzzy_overlap.py
+"$PYTHON" tests/test_fuzzy_overlap.py
 echo "→ wps-gate threshold-logic test"
-python3 tests/test_wps_check.py
+"$PYTHON" tests/test_wps_check.py
+echo "→ mandatory Node no-skip gate regression"
+"$PYTHON" tests/test_node_gate.py
+echo "→ draft-first merge-train policy test"
+"$PYTHON" tests/test_merge_train.py
 
-# Player logic check: the paged-mode page-anchor function (index.html). Uses Node's
-# built-in test runner only (no npm/deps). Skips with a notice if Node is absent so
-# the gate stays runnable on a Python-only box, but runs in CI / on dev machines.
-if command -v node >/dev/null 2>&1; then
-  echo "→ paged-anchor regression test (index.html pagedAnchors; Codex P1 PR #27)"
-  node --test tests/test_paged_anchor.mjs
-else
-  echo "→ paged-anchor regression test SKIPPED (node not found)"
+# Player behavior is a JavaScript/security boundary, so the dependency-free Node
+# runner is mandatory and neither suite may silently skip.
+if ! command -v node >/dev/null 2>&1; then
+  echo "✗ player behavioral gates require node" >&2
+  exit 1
 fi
+echo "→ paged-anchor regression test (index.html pagedAnchors; Codex P1 PR #27)"
+"$PYTHON" tools/run_node_tests.py tests/test_paged_anchor.mjs
+echo "→ generic-ingest behavioral/security test (mandatory, no skips)"
+"$PYTHON" tools/run_node_tests.py tests/test_generic_ingest.mjs
 
 echo "✓ all local checks passed"
