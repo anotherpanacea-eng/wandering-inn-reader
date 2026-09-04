@@ -11,7 +11,7 @@ const html=readFileSync(join(root,"index.html"),"utf8");
 const a=html.indexOf("// GENERIC_INGEST_BEGIN"),b=html.indexOf("// GENERIC_INGEST_END");
 assert.ok(a>=0&&b>a,"shipped generic-ingest block missing");
 const modPath=join(tmpdir(),`generic_ingest_${process.pid}.mjs`);
-const names=["GI_LIMIT","decodeGenericText","decodeXmlBytes","txtBook","markdownInline","markdownBook","projectGeneric","crc32","parseZip","readZipEntry","checkXmlDoctype","resolveHref","selectOpfPath","assembleOpfModel","assembleEpubBook","genericDocFromBytes","genericIdentity","genericPositionKey"];
+const names=["GI_LIMIT","genericErrorMessage","decodeGenericText","decodeXmlBytes","txtBook","markdownInline","markdownBook","projectGeneric","crc32","parseZip","readZipEntry","checkXmlDoctype","resolveHref","selectOpfPath","assembleOpfModel","assembleEpubBook","genericDocFromBytes","genericIdentityResult","genericIdentity","genericPositionKey"];
 writeFileSync(modPath,html.slice(a,b)+`\nexport {${names.join(",")}};\n`);
 after(()=>{try{rmSync(modPath);}catch{}});
 const gi=await import(pathToFileURL(modPath).href);
@@ -21,7 +21,7 @@ const le16=n=>Uint8Array.of(n&255,(n>>>8)&255);
 const le32=n=>Uint8Array.of(n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255);
 const cat=(...xs)=>{const n=xs.reduce((s,x)=>s+x.length,0),o=new Uint8Array(n);let p=0;for(const x of xs){o.set(x,p);p+=x.length;}return o;};
 async function rawDeflate(bytes){const rd=new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate-raw")).getReader(),cs=[];for(;;){const x=await rd.read();if(x.done)break;cs.push(x.value);}return cat(...cs);}
-async function makeZip(specs){const locals=[],centrals=[];let off=0;for(const s of specs){const name=te.encode(s.name),plain=te.encode(s.text),method=s.method||0,comp=method===8?await rawDeflate(plain):plain,crc=gi.crc32(plain),flags=(s.flags||0)|(s.descriptor?8:0),extra=s.localExtra||new Uint8Array(),desc=s.descriptor?(s.descriptor==="nosig"?cat(le32(crc),le32(comp.length),le32(plain.length)):cat(le32(0x08074b50),le32(crc),le32(comp.length),le32(plain.length))):new Uint8Array(),local=cat(le32(0x04034b50),le16(20),le16(flags),le16(method),le16(0),le16(0),le32(s.descriptor?0:crc),le32(s.descriptor?0:comp.length),le32(s.descriptor?0:plain.length),le16(name.length),le16(extra.length),name,extra,comp,desc),gap=new Uint8Array(s.gap||0),centralExtra=s.centralExtra||new Uint8Array();locals.push(cat(local,gap));centrals.push(cat(le32(0x02014b50),le16(20),le16(20),le16(flags),le16(method),le16(0),le16(0),le32(crc),le32(comp.length),le32(plain.length),le16(name.length),le16(centralExtra.length),le16(0),le16(0),le16(0),le32(0),le32(off),name,centralExtra));off+=local.length+gap.length;}const central=cat(...centrals),eocd=cat(le32(0x06054b50),le16(0),le16(0),le16(specs.length),le16(specs.length),le32(central.length),le32(off),le16(0));return cat(...locals,central,eocd);}
+async function makeZip(specs){const locals=[],centrals=[];let off=0;for(const s of specs){const name=te.encode(s.name),plain=te.encode(s.text),method=s.method||0,comp=method===8?await rawDeflate(plain):plain,crc=gi.crc32(plain),flags=(s.flags||0)|(s.descriptor?8:0),extra=s.localExtra||new Uint8Array(),desc=s.descriptor?(s.descriptor==="nosig"?cat(le32(crc),le32(comp.length),le32(plain.length)):cat(le32(0x08074b50),le32(crc),le32(comp.length),le32(plain.length))):new Uint8Array(),local=cat(le32(0x04034b50),le16(20),le16(flags),le16(method),le16(0),le16(0),le32(s.descriptor?0:crc),le32(s.descriptor?0:comp.length),le32(s.descriptor?0:plain.length),le16(name.length),le16(extra.length),name,extra,comp,desc),gap=new Uint8Array(s.gap||0),centralExtra=s.centralExtra||new Uint8Array();locals.push(cat(local,gap));centrals.push(cat(le32(0x02014b50),le16(20),le16(20),le16(flags),le16(method),le16(0),le16(0),le32(crc),le32(comp.length),le32(plain.length),le16(name.length),le16(centralExtra.length),le16(0),le16(s.diskStart||0),le16(0),le32(0),le32(off),name,centralExtra));off+=local.length+gap.length;}const central=cat(...centrals),eocd=cat(le32(0x06054b50),le16(0),le16(0),le16(specs.length),le16(specs.length),le32(central.length),le32(off),le16(0));return cat(...locals,central,eocd);}
 
 test("strict text decoding and TXT projection",async()=>{
   assert.equal(gi.decodeGenericText(te.encode("a\r\n\r\nb")).text,"a\n\nb");
@@ -29,8 +29,11 @@ test("strict text decoding and TXT projection",async()=>{
   assert.equal(gi.decodeGenericText(Uint8Array.of(0xff,0xfe,0x41,0,0x42,0)).text,"AB");
   assert.equal(gi.decodeGenericText(Uint8Array.of(0xfe,0xff,0,0x41,0,0x42)).text,"AB");
   assert.throws(()=>gi.decodeGenericText(Uint8Array.of(0,0,0xfe,0xff)),e=>e.code==="ENCODING");
+  assert.throws(()=>gi.decodeGenericText(Uint8Array.of(0x2b,0x2f,0x76,0x38,0x2d,0x61)),e=>e.code==="ENCODING");
   assert.throws(()=>gi.decodeGenericText(te.encode("a\0b")),e=>e.code==="ENCODING");
   assert.throws(()=>gi.decodeGenericText(Uint8Array.of(0xff,0)),/invalid/);
+  assert.equal([...gi.genericErrorMessage("A".repeat(200)+"\nCONTROL.opf")].length,160);
+  assert.equal(gi.genericErrorMessage("bad\npath\u007f.opf").includes("\n"),false);
   await assert.rejects(()=>gi.genericDocFromBytes(te.encode(" \n\t"),"blank.txt"),e=>e.code==="EMPTY");
   const r=await gi.genericDocFromBytes(te.encode("First line\ncontinued\n\nSecond."),"same.txt");
   assert.deepEqual(r.doc,{title:"same",audio:"",chapters:[],segments:[{id:0,start:0,end:1,text:"First line continued"},{id:1,start:1,end:2,text:"Second."}]});
@@ -237,6 +240,7 @@ test("additional ZIP and XML structural negatives fail with stable categories",a
   const multidisk=await makeZip([{name:"mimetype",text:"application/epub+zip"}]);
   new DataView(multidisk.buffer).setUint16(multidisk.length-18,1,true);
   assert.throws(()=>gi.parseZip(multidisk),e=>e.code==="ZIP_MULTI");
+  await assert.rejects(async()=>gi.parseZip(await makeZip([{name:"mimetype",text:"application/epub+zip",diskStart:1}])),e=>e.code==="ZIP_MULTI");
   assert.throws(()=>gi.decodeXmlBytes(te.encode('<?xml version="1.0" encoding="UTF-16"?><x/>')),e=>e.code==="XML_ENCODING");
   assert.throws(()=>gi.decodeXmlBytes(te.encode('<?xml encoding="UTF-8" encoding="UTF-8"?><x/>')),e=>e.code==="XML_DECL");
 });
@@ -259,4 +263,6 @@ test("stable identity and position keys isolate same-title generic books",async(
   assert.equal(a,a2);assert.notEqual(a,b);assert.match(a,/^generic-v1:txt:[0-9a-f]{64}$/);
   assert.notEqual(gi.genericPositionKey("text",a,"Shared"),gi.genericPositionKey("text",b,"Shared"));
   assert.equal(gi.genericPositionKey("audio","","Shared"),"inn-reader-pos:Shared");
+  const fallback=await gi.genericIdentityResult(te.encode("one"),"txt",null);
+  assert.equal(fallback.stable,false);assert.match(fallback.identity,/^ephemeral:[0-9a-f]{32}$/);
 });
