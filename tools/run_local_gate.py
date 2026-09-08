@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+sys.dont_write_bytecode = True
 
 try:
     from tools.land_merge_train import LandingError, _run_gate

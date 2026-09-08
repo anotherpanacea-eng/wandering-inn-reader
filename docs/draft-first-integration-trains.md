@@ -85,6 +85,15 @@ remaining open set equals the declared exclusions, and deletes only constituent/
 that still match their inventoried heads under exact leases. Without `--push`, it performs the
 same preflight and does not mutate `main`.
 
+Post-land cleanup is a separate reported phase because the successful compare-and-swap cannot be
+rolled back. Before closing any PR, the tool proves the complete open set contains only the exact
+included/train identities plus the declared exclusions. A successful cleanup reports
+`"landed":true,"cleanup_status":"complete"`. If a close, re-query, or exact branch disposal fails
+after `main` advances, the command instead prints `LANDED_CLEANUP_INCOMPLETE` with a truthful JSON
+receipt (`landed` remains true, any confirmed `closed_prs` are retained) and exits 2. Treat that as
+an idempotent exact-state cleanup incident; do not rerun the full landing or describe the train as
+unlanded.
+
 Afterward, close governing issues. The tool has already proved every included head is in `main`,
 closed/observed the constituent and train PRs, disposed of unchanged same-repository branches under
 exact leases, and verified the remaining open set. A failed compare-and-swap is a refusal, never

@@ -6,6 +6,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -264,6 +265,31 @@ class MergeTrainTest(unittest.TestCase):
         if os.name == "nt":
             self.assertNotIn("windows\\system32", str(Path(args[1]).resolve()).lower())
         self.assertEqual(env["PYTHON"], Path(sys.executable).as_posix())
+        self.assertTrue(landing.sys.dont_write_bytecode)
+
+    def test_documented_entrypoints_leave_fresh_copy_cache_free(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            tools_dir = root / "tools"
+            tools_dir.mkdir()
+            source_tools = Path(__file__).resolve().parents[1] / "tools"
+            for name in ("check_merge_train.py", "land_merge_train.py", "run_local_gate.py"):
+                shutil.copy2(source_tools / name, tools_dir / name)
+            (root / "check.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            clean_env = {
+                key: value for key, value in os.environ.items()
+                if key.upper() not in {"PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX"}
+            }
+            for command in (
+                [sys.executable, "tools/run_local_gate.py"],
+                [sys.executable, "tools/land_merge_train.py", "--help"],
+            ):
+                result = subprocess.run(
+                    command, cwd=root, env=clean_env, capture_output=True, text=True,
+                    encoding="utf-8", check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((tools_dir / "__pycache__").exists())
 
     def test_landing_rejects_malformed_inventory_before_fetch(self) -> None:
         inventory_path = self.repo / "bad-inventory.json"
@@ -277,6 +303,15 @@ class MergeTrainTest(unittest.TestCase):
         malformed["included"] = [dict(self.inventory["included"][0], head_ref="bad/ref/")]
         with self.assertRaisesRegex(policy.TrainError, "constituent branch"):
             policy.validate_inventory_shape(self.repo, malformed)
+
+    def test_landing_refuses_hostile_transport_before_fetch(self) -> None:
+        inventory_path = self.repo / "inventory.json"
+        inventory_path.write_text(json.dumps(self.inventory), encoding="utf-8")
+        git(self.repo, "config", "url.https://evil.invalid/.insteadOf", "https://github.com/")
+        with mock.patch.object(landing, "_fetch_live") as fetch:
+            with self.assertRaisesRegex(policy.TrainError, "local Git config"):
+                landing.land(self.repo, inventory_path, 99, "train/test")
+            fetch.assert_not_called()
 
     def test_live_inventory_requires_unique_main_targeting_drafts(self) -> None:
         def live(number: int, repo: str, ref: str, head: str) -> dict[str, object]:
@@ -303,6 +338,84 @@ class MergeTrainTest(unittest.TestCase):
             landing._prove_open_inventory(self.inventory, changed, 99, "train/test")
         with self.assertRaisesRegex(landing.LandingError, "duplicate"):
             landing._prove_open_inventory(self.inventory, [*rows, dict(rows[0])], 99, "train/test")
+
+    def test_post_land_close_refuses_moved_identity_before_any_close(self) -> None:
+        rows = [{
+            "number": 1, "draft": True, "base": {"ref": "main"},
+            "head": {"repo": {"full_name": policy.REPOSITORY},
+                     "ref": "feat/one", "sha": self.two},
+        }]
+        expected = {1: (1, policy.REPOSITORY.lower(), "feat/one", self.one)}
+        closed: list[int] = []
+        with self.assertRaisesRegex(landing.LandingError, "moved after landing"):
+            landing._close_exact_prs(
+                self.repo, rows, expected, lambda _repo, number: closed.append(number),
+            )
+        self.assertEqual(closed, [])
+
+    def test_post_land_unexpected_pr_refuses_before_any_close(self) -> None:
+        def live(number: int, ref: str, head: str) -> dict[str, object]:
+            return {
+                "number": number, "draft": True, "base": {"ref": "main"},
+                "head": {"repo": {"full_name": policy.REPOSITORY},
+                         "ref": ref, "sha": head},
+            }
+
+        rows = [
+            live(1, "feat/one", self.one), live(2, "feat/two", self.two),
+            live(99, "train/test", self.merge_two),
+            live(77, "feat/unexpected", self.one),
+        ]
+        closed: list[int] = []
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(landing, "_git", return_value=""), \
+                mock.patch.object(policy, "_resolve", return_value=self.merge_two), \
+                mock.patch.object(policy, "_run", return_value=completed):
+            with self.assertRaisesRegex(landing.LandingError, "declared exclusions"):
+                landing._post_land(
+                    self.repo, self.inventory, 99, "train/test", self.merge_two,
+                    policy.REMOTE_URL, lambda _repo: rows,
+                    lambda _repo, number: closed.append(number),
+                )
+        self.assertEqual(closed, [])
+
+    def test_successful_cas_preserves_landed_receipt_when_cleanup_fails(self) -> None:
+        inventory_path = self.repo.parent / f"{self.repo.name}-inventory.json"
+        self.addCleanup(inventory_path.unlink, missing_ok=True)
+        inventory_path.write_text(json.dumps(self.inventory), encoding="utf-8")
+
+        def live(number: int, ref: str, head: str) -> dict[str, object]:
+            return {
+                "number": number, "draft": True, "base": {"ref": "main"},
+                "body": "", "head": {"repo": {"full_name": policy.REPOSITORY},
+                "ref": ref, "sha": head},
+            }
+
+        rows = [
+            live(1, "feat/one", self.one), live(2, "feat/two", self.two),
+            live(99, "train/test", self.merge_two),
+        ]
+        cleanup_error = landing.PostLandCleanupError("close failed", [1])
+        with mock.patch.object(landing, "_canonical_train_ref", return_value="train/test"), \
+                mock.patch.object(landing, "_fetch_live"), \
+                mock.patch.object(landing, "_prove_approvals"), \
+                mock.patch.object(policy, "verify_train", return_value={"head": self.merge_two}), \
+                mock.patch.object(policy, "_resolve", return_value=self.merge_two), \
+                mock.patch.object(landing, "_run_gate"), \
+                mock.patch.object(landing, "_prove_synthetic", return_value=self.merge_two), \
+                mock.patch.object(landing, "_git", return_value="") as git_call, \
+                mock.patch.object(landing, "_post_land", side_effect=cleanup_error):
+            receipt = landing.land(
+                self.repo, inventory_path, 99, "train/test", True,
+                open_prs=lambda _repo: rows,
+            )
+        self.assertTrue(receipt["landed"])
+        self.assertEqual(receipt["cleanup_status"], "incomplete")
+        self.assertEqual(receipt["closed_prs"], [1])
+        self.assertEqual(receipt["deleted_branches"], [])
+        self.assertEqual(receipt["cleanup_error"], "close failed")
+        self.assertTrue(any("--force-with-lease=refs/heads/main:" in " ".join(map(str, call.args))
+                            for call in git_call.call_args_list))
 
     def test_local_bare_end_to_end_landing_and_disposal(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -395,6 +508,7 @@ class MergeTrainTest(unittest.TestCase):
                     remote_url=remote_url, open_prs=open_prs, close_pr=close_pr,
                 )
             self.assertTrue(receipt["landed"])
+            self.assertEqual(receipt["cleanup_status"], "complete")
             self.assertEqual(set(receipt["closed_prs"]), {1, 99})
             self.assertEqual(set(receipt["deleted_branches"]), {"feat/one", "train/test"})
             self.assertEqual(bare("rev-parse", "refs/heads/main"), synthetic)

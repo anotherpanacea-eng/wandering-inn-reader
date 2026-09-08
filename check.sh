@@ -11,7 +11,11 @@
 # and the safe-pattern lint also run from the pre-commit hook (.githooks/pre-commit).
 set -e
 
-root="$(git rev-parse --show-toplevel)"
+# Windows Git Bash can mistranslate the absolute gitdir recorded by a linked
+# worktree when discovery begins from the POSIX-form cwd. Anchor discovery at
+# the native cwd there; ordinary shells fall back to their normal pwd.
+here="$(pwd -W 2>/dev/null || pwd)"
+root="$(git -C "$here" rev-parse --show-toplevel)"
 cd "$root"
 PYTHON="${PYTHON:-python3}"
 

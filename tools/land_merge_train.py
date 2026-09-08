@@ -14,6 +14,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+sys.dont_write_bytecode = True
+
 try:
     from tools import check_merge_train as train
 except ModuleNotFoundError:  # Direct execution places tools/, not the repo root, on sys.path.
@@ -35,6 +37,14 @@ APPROVAL_ACTORS = {
 
 class LandingError(ValueError):
     """The live train evidence is incomplete or changed."""
+
+
+class PostLandCleanupError(LandingError):
+    """Main landed, but exact post-land cleanup did not finish."""
+
+    def __init__(self, message: str, closed_prs: list[int] | None = None) -> None:
+        super().__init__(message)
+        self.closed_prs = list(closed_prs or [])
 
 
 def _invoke(command: Sequence[str], repo: Path,
@@ -226,6 +236,74 @@ def _delete_unchanged_branches(repo: Path, branches: list[tuple[str, str]],
     return [remote_ref.removeprefix("refs/heads/") for remote_ref, _ in deletions]
 
 
+def _close_exact_prs(
+    repo: Path, rows: list[dict[str, Any]],
+    expected: dict[int, tuple[int, str, str, str]],
+    close_pr: Callable[[Path, int], None],
+) -> list[int]:
+    live: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        identity = _pr_identity(row)
+        if identity[0] in live:
+            raise LandingError("GitHub returned a duplicate post-land PR number")
+        live[identity[0]] = row
+    for number, identity in expected.items():
+        row = live.get(number)
+        if row is None:
+            continue
+        if (_pr_identity(row) != identity or row.get("base", {}).get("ref") != "main"
+                or row.get("draft") is not True):
+            raise LandingError(f"PR #{number} moved after landing; refusing to close it")
+    closed: list[int] = []
+    for number in expected:
+        if number in live:
+            try:
+                close_pr(repo, number)
+            except Exception as exc:
+                raise PostLandCleanupError(
+                    f"failed to close exact PR #{number}: {exc}", closed,
+                ) from exc
+            closed.append(number)
+    return closed
+
+
+def _prove_post_land_inventory(
+    inventory: dict[str, Any], train_pr: int, train_ref: str,
+    rows: list[dict[str, Any]], *, allow_expected_closures: bool,
+) -> dict[int, tuple[int, str, str, str]]:
+    expected_closures = {
+        row["pr"]: (row["pr"], row["head_repo"].lower(), row["head_ref"], row["head"])
+        for row in inventory["included"]
+    }
+    expected_closures[train_pr] = (
+        train_pr, train.REPOSITORY.lower(), train_ref, inventory["head"],
+    )
+    expected_remaining = {
+        (row["pr"], row["head_repo"].lower(), row["head_ref"], row["head"])
+        for row in inventory["excluded"]
+    }
+    live_numbers: set[int] = set()
+    remaining: set[tuple[int, str, str, str]] = set()
+    for row in rows:
+        identity = _pr_identity(row)
+        if identity[0] in live_numbers:
+            raise LandingError("GitHub returned a duplicate post-land PR number")
+        live_numbers.add(identity[0])
+        if row.get("base", {}).get("ref") != "main" or row.get("draft") is not True:
+            raise LandingError("post-land open PRs lost draft/main custody")
+        expected = expected_closures.get(identity[0])
+        if expected is not None:
+            if identity != expected:
+                raise LandingError(f"PR #{identity[0]} moved after landing; refusing cleanup")
+            if not allow_expected_closures:
+                raise LandingError(f"closed PR #{identity[0]} remains open after cleanup")
+        else:
+            remaining.add(identity)
+    if remaining != expected_remaining:
+        raise LandingError("post-land open PRs do not equal the declared exclusions")
+    return expected_closures
+
+
 def _post_land(
     repo: Path, inventory: dict[str, Any], train_pr: int, train_ref: str,
     synthetic: str, remote_url: str,
@@ -241,26 +319,25 @@ def _post_land(
             raise LandingError(f"landed main does not contain included PR #{row['pr']}")
 
     rows = open_prs(repo)
-    open_numbers = {_pr_identity(row)[0] for row in rows}
-    close_numbers = [row["pr"] for row in inventory["included"]] + [train_pr]
-    closed: list[int] = []
-    for number in close_numbers:
-        if number in open_numbers:
-            close_pr(repo, number)
-            closed.append(number)
-    remaining = {_pr_identity(row) for row in open_prs(repo)}
-    expected = {
-        (row["pr"], row["head_repo"].lower(), row["head_ref"], row["head"])
-        for row in inventory["excluded"]
-    }
-    if remaining != expected:
-        raise LandingError("post-land open PRs do not equal the declared exclusions")
-    deleted = _delete_unchanged_branches(
-        repo,
-        [(row["head_ref"], row["head"]) for row in inventory["included"]]
-        + [(train_ref, inventory["head"])],
-        remote_url,
+    expected_closures = _prove_post_land_inventory(
+        inventory, train_pr, train_ref, rows, allow_expected_closures=True,
     )
+    closed = _close_exact_prs(repo, rows, expected_closures, close_pr)
+    try:
+        _prove_post_land_inventory(
+            inventory, train_pr, train_ref, open_prs(repo),
+            allow_expected_closures=False,
+        )
+        deleted = _delete_unchanged_branches(
+            repo,
+            [(row["head_ref"], row["head"]) for row in inventory["included"]]
+            + [(train_ref, inventory["head"])],
+            remote_url,
+        )
+    except PostLandCleanupError:
+        raise
+    except Exception as exc:
+        raise PostLandCleanupError(str(exc), closed) from exc
     return {"closed_prs": closed, "deleted_branches": deleted}
 
 
@@ -273,6 +350,8 @@ def land(
     repo = repo.resolve()
     inventory = train.load_inventory(inventory_path.resolve())
     train.validate_inventory_shape(repo, inventory)
+    train._refuse_ambiguous_objects(repo)
+    train._refuse_hidden_checkout_state(repo)
     train_ref = _canonical_train_ref(repo, train_ref)
     _fetch_live(repo, inventory, train_pr, train_ref, remote_url)
     train_row = _prove_open_inventory(inventory, open_prs(repo), train_pr, train_ref)
@@ -294,12 +373,24 @@ def land(
             repo, "push", f"--force-with-lease={MAIN_REF}:{inventory['base']}",
             remote_url, f"{synthetic}:{MAIN_REF}",
         )
-        receipt["landed"] = True
-        receipt.update(_post_land(
-            repo, inventory, train_pr, train_ref, synthetic, remote_url, open_prs, close_pr,
-        ))
+        receipt.update({
+            "landed": True, "cleanup_status": "incomplete",
+            "closed_prs": [], "deleted_branches": [],
+        })
+        try:
+            receipt.update(_post_land(
+                repo, inventory, train_pr, train_ref, synthetic, remote_url,
+                open_prs, close_pr,
+            ))
+            receipt["cleanup_status"] = "complete"
+        # The CAS is irreversible here: even an unexpected cleanup adapter defect must
+        # return a truthful landed receipt rather than fall through to a pre-land refusal.
+        except Exception as exc:
+            if isinstance(exc, PostLandCleanupError):
+                receipt["closed_prs"] = exc.closed_prs
+            receipt["cleanup_error"] = str(exc)
     else:
-        receipt["landed"] = False
+        receipt.update({"landed": False, "cleanup_status": "not-run"})
     return receipt
 
 
@@ -316,6 +407,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (LandingError, train.TrainError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         print(f"merge-train landing: REFUSED: {exc}")
         return 1
+    if receipt.get("landed") and receipt.get("cleanup_status") == "incomplete":
+        print("merge-train landing: LANDED_CLEANUP_INCOMPLETE: "
+              + json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+        return 2
     print("merge-train landing: " + json.dumps(receipt, sort_keys=True, separators=(",", ":")))
     return 0
 
