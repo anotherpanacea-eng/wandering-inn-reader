@@ -139,6 +139,19 @@ class MergeTrainTest(unittest.TestCase):
         with self.assertRaisesRegex(policy.TrainError, "local Git config"):
             policy.verify_train(self.repo, self.inventory)
 
+    def test_hostile_fsmonitor_is_refused_without_execution(self) -> None:
+        marker = self.repo / "fsmonitor-ran.txt"
+        hook = self.repo / "fsmonitor-hook.sh"
+        hook.write_text(
+            f"#!/bin/sh\nprintf ran > '{marker.as_posix()}'\n",
+            encoding="utf-8",
+        )
+        hook.chmod(0o755)
+        git(self.repo, "config", "core.fsmonitor", hook.as_posix())
+        with self.assertRaisesRegex(policy.TrainError, "local Git config"):
+            policy.verify_train(self.repo, self.inventory)
+        self.assertFalse(marker.exists())
+
     def test_excluded_head_and_branch_must_be_real_and_bound(self) -> None:
         excluded = {
             "pr": 3, "head_repo": policy.REPOSITORY, "head_ref": "feat/later",
@@ -416,6 +429,29 @@ class MergeTrainTest(unittest.TestCase):
         self.assertEqual(receipt["cleanup_error"], "close failed")
         self.assertTrue(any("--force-with-lease=refs/heads/main:" in " ".join(map(str, call.args))
                             for call in git_call.call_args_list))
+
+    def test_branch_disposal_receipt_survives_post_push_verification_failure(self) -> None:
+        branches = [("feat/one", self.one), ("train/test", self.merge_two)]
+        probes = iter([
+            f"{self.one}\trefs/heads/feat/one",
+            f"{self.merge_two}\trefs/heads/train/test",
+            "",
+        ])
+
+        def fake_git(_repo: Path, *args: str) -> str:
+            if args[0] == "push":
+                return ""
+            if args[0] == "ls-remote":
+                try:
+                    return next(probes)
+                except StopIteration as exc:
+                    raise landing.LandingError("verify transport failed") from exc
+            raise AssertionError(args)
+
+        with mock.patch.object(landing, "_git", side_effect=fake_git):
+            with self.assertRaises(landing.PostLandCleanupError) as raised:
+                landing._delete_unchanged_branches(self.repo, branches, "remote")
+        self.assertEqual(raised.exception.deleted_branches, ["feat/one", "train/test"])
 
     def test_local_bare_end_to_end_landing_and_disposal(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:

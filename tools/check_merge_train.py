@@ -51,7 +51,8 @@ def _environment() -> dict[str, str]:
 
 def _run(repo: Path, *args: str, text: bool = True) -> subprocess.CompletedProcess[Any]:
     return subprocess.run(
-        ["git", "--no-replace-objects", "-C", str(repo.resolve()), *args],
+        ["git", "--no-replace-objects", "-c", "core.fsmonitor=false",
+         "-C", str(repo.resolve()), *args],
         capture_output=True,
         text=text,
         encoding="utf-8" if text else None,
@@ -179,7 +180,7 @@ def _refuse_hidden_checkout_state(repo: Path) -> None:
         raise TrainError("origin must be the one canonical repository URL")
     unsafe_config = _run(
         repo, "config", "--local", "--get-regexp",
-        r"^(include\.|includeif\.|core\.(attributesfile|excludesfile|sparsecheckout|sparsecheckoutcone|worktree)$|extensions\.worktreeconfig$|merge\..*\.driver$|merge\.(default|renormalize)$|url\..*\.(insteadof|pushinsteadof)$|https?\.|remote\..*\.proxy$)",
+        r"^(include\.|includeif\.|core\.(attributesfile|excludesfile|fsmonitor|sparsecheckout|sparsecheckoutcone|worktree)$|extensions\.worktreeconfig$|merge\..*\.driver$|merge\.(default|renormalize)$|url\..*\.(insteadof|pushinsteadof)$|https?\.|remote\..*\.proxy$)",
     )
     if unsafe_config.returncode == 0 and unsafe_config.stdout.strip():
         raise TrainError("local Git config can alter checkout, attributes, or merge behavior")

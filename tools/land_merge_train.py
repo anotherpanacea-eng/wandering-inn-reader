@@ -42,9 +42,11 @@ class LandingError(ValueError):
 class PostLandCleanupError(LandingError):
     """Main landed, but exact post-land cleanup did not finish."""
 
-    def __init__(self, message: str, closed_prs: list[int] | None = None) -> None:
+    def __init__(self, message: str, closed_prs: list[int] | None = None,
+                 deleted_branches: list[str] | None = None) -> None:
         super().__init__(message)
         self.closed_prs = list(closed_prs or [])
+        self.deleted_branches = list(deleted_branches or [])
 
 
 def _invoke(command: Sequence[str], repo: Path,
@@ -230,10 +232,14 @@ def _delete_unchanged_branches(repo: Path, branches: list[tuple[str, str]],
             args.append(f"--force-with-lease={remote_ref}:{expected}")
         args.extend([remote_url, *[f":{remote_ref}" for remote_ref, _ in deletions]])
         _git(repo, *args)
-    for remote_ref, _ in deletions:
-        if _git(repo, "ls-remote", "--heads", remote_url, remote_ref).strip():
-            raise LandingError(f"remote branch {remote_ref} survived exact-lease disposal")
-    return [remote_ref.removeprefix("refs/heads/") for remote_ref, _ in deletions]
+    accepted = [remote_ref.removeprefix("refs/heads/") for remote_ref, _ in deletions]
+    try:
+        for remote_ref, _ in deletions:
+            if _git(repo, "ls-remote", "--heads", remote_url, remote_ref).strip():
+                raise LandingError(f"remote branch {remote_ref} survived exact-lease disposal")
+    except Exception as exc:
+        raise PostLandCleanupError(str(exc), deleted_branches=accepted) from exc
+    return accepted
 
 
 def _close_exact_prs(
@@ -334,8 +340,8 @@ def _post_land(
             + [(train_ref, inventory["head"])],
             remote_url,
         )
-    except PostLandCleanupError:
-        raise
+    except PostLandCleanupError as exc:
+        raise PostLandCleanupError(str(exc), closed, exc.deleted_branches) from exc
     except Exception as exc:
         raise PostLandCleanupError(str(exc), closed) from exc
     return {"closed_prs": closed, "deleted_branches": deleted}
@@ -388,6 +394,7 @@ def land(
         except Exception as exc:
             if isinstance(exc, PostLandCleanupError):
                 receipt["closed_prs"] = exc.closed_prs
+                receipt["deleted_branches"] = exc.deleted_branches
             receipt["cleanup_error"] = str(exc)
     else:
         receipt.update({"landed": False, "cleanup_status": "not-run"})
