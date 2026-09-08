@@ -5,6 +5,7 @@ import {readFileSync,writeFileSync,rmSync} from "node:fs";
 import {dirname,join} from "node:path";
 import {tmpdir} from "node:os";
 import {fileURLToPath,pathToFileURL} from "node:url";
+import {spawnSync} from "node:child_process";
 
 const root=join(dirname(fileURLToPath(import.meta.url)),"..");
 const html=readFileSync(join(root,"index.html"),"utf8");
@@ -15,6 +16,14 @@ const names=["validateDoc","GI_LIMIT","genericErrorMessage","decodeGenericText",
 writeFileSync(modPath,html.slice(a,b)+`\nexport {${names.join(",")}};\n`);
 after(()=>{try{rmSync(modPath);}catch{}});
 const gi=await import(pathToFileURL(modPath).href);
+
+if(process.env.GI_SCALE_CHILD==="1"){
+  const blocks=Array.from({length:100000},(_,i)=>({text:`Block ${i}`,kind:"prose",resourcePath:""}));
+  const candidates=Array.from({length:10000},(_,i)=>({title:`Block ${i*10}`,blockIndex:i*10,resourcePath:""}));
+  const scaled=gi.projectGeneric({title:"Scale",blocks,chapterCandidates:candidates,warnings:[]});
+  assert.equal(scaled.segments.length,100000);assert.equal(scaled.chapters.length,10000);
+  rmSync(modPath,{force:true});process.exit(0);
+}
 
 const te=new TextEncoder();
 const le16=n=>Uint8Array.of(n&255,(n>>>8)&255);
@@ -63,11 +72,14 @@ test("Markdown headings map without dropping terminal content",()=>{
   const consecutive=gi.projectGeneric(gi.markdownBook(te.encode("# First\n# Second\n\nBody"),"b.md"));
   assert.deepEqual(consecutive.segments.map(x=>x.text),["Body"]);
   assert.deepEqual(consecutive.chapters,[{title:"First",start:0,seg:0}]);
-  const blocks=Array.from({length:10000},(_,i)=>({text:`Block ${i}`,kind:"prose",resourcePath:""}));
-  let titleReads=0;const candidates=Array.from({length:1000},(_,i)=>({get title(){titleReads++;return `Block ${i*10}`;},blockIndex:i*10,resourcePath:""}));
-  const scaled=gi.projectGeneric({title:"Scale",blocks,chapterCandidates:candidates,warnings:[]});
-  assert.equal(scaled.segments.length,10000);assert.equal(scaled.chapters.length,1000);
-  assert.ok(titleReads<=candidates.length*3,"projection candidate access must remain linear");
+});
+
+test("generic projection remains bounded at contract-scale dimensions",()=>{
+  const child=spawnSync(process.execPath,[fileURLToPath(import.meta.url)],{
+    env:{...process.env,GI_SCALE_CHILD:"1"},encoding:"utf8",timeout:3000,
+  });
+  assert.equal(child.error?.code,undefined,`projection exceeded CPU budget: ${child.error}`);
+  assert.equal(child.status,0,child.stderr||child.stdout);
 });
 
 test("stored, descriptor, and raw-deflate ZIP entries round-trip",async()=>{
