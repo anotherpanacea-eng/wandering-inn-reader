@@ -64,12 +64,11 @@ test("Markdown headings map without dropping terminal content",()=>{
   assert.deepEqual(consecutive.segments.map(x=>x.text),["Body"]);
   assert.deepEqual(consecutive.chapters,[{title:"First",start:0,seg:0}]);
   const blocks=Array.from({length:10000},(_,i)=>({text:`Block ${i}`,kind:"prose",resourcePath:""}));
-  const candidates=Array.from({length:1000},(_,i)=>({title:`Block ${i*10}`,blockIndex:i*10,resourcePath:""}));
-  const nativeFilter=Array.prototype.filter;let projectionFilters=0;
-  Array.prototype.filter=function(...args){projectionFilters++;return nativeFilter.apply(this,args);};
-  let scaled;try{scaled=gi.projectGeneric({title:"Scale",blocks,chapterCandidates:candidates,warnings:[]});}finally{Array.prototype.filter=nativeFilter;}
+  const titleOps={n:0},countedTitle=value=>({replace(...args){titleOps.n++;return value.replace(...args);}});
+  const candidates=Array.from({length:1000},(_,i)=>({title:countedTitle(`Block ${i*10}`),blockIndex:i*10,resourcePath:""}));
+  const scaled=gi.projectGeneric({title:"Scale",blocks,chapterCandidates:candidates,warnings:[]});
   assert.equal(scaled.segments.length,10000);assert.equal(scaled.chapters.length,1000);
-  assert.equal(projectionFilters,0,"projection must not scan every candidate for every block");
+  assert.ok(titleOps.n<=candidates.length*3,"projection work must remain linear in candidates");
 });
 
 test("stored, descriptor, and raw-deflate ZIP entries round-trip",async()=>{
