@@ -76,7 +76,7 @@ test("Markdown headings map without dropping terminal content",()=>{
 
 test("generic projection remains bounded at contract-scale dimensions",()=>{
   const child=spawnSync(process.execPath,[fileURLToPath(import.meta.url)],{
-    env:{...process.env,GI_SCALE_CHILD:"1"},encoding:"utf8",timeout:3000,
+    env:{...process.env,GI_SCALE_CHILD:"1"},encoding:"utf8",timeout:1000,
   });
   assert.equal(child.error?.code,undefined,`projection exceeded CPU budget: ${child.error}`);
   assert.equal(child.status,0,child.stderr||child.stdout);
