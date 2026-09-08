@@ -15,8 +15,10 @@
 
 Train PRs only:
 
-- External inventory evidence: <!-- path outside the train worktree, or PR-hosted attachment/body reference -->
+- External inventory evidence: <!-- path outside the train worktree, or a comment on this PR; never the body -->
 - Inventory SHA-256: <!-- 64-hex canonical digest emitted by the verifier -->
+<!-- A train PR body must contain no fenced code block and no quoted line; the landing tool refuses both. -->
+
 ## Train review approvals
 
 - generic: <!-- approved @ 40-hex train head + 64-hex inventory digest; vp_open_prs_generic -->

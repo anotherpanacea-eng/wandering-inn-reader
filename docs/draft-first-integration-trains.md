@@ -65,6 +65,12 @@ Open the train as a draft PR. Review its exact head and canonical inventory dige
 all three lanes: generic, fleet-posture, and CI/cost. Put the three head-plus-digest approvals in the
 dedicated PR-body field from the template. A train-head or inventory change invalidates all three.
 
+The train PR body carries approval evidence, so it must contain no fenced code block and no quoted
+line: the landing tool refuses a body with either, because an approval section rendered inside a
+fence would read as inert to a human and as canonical to the parser. Keep the inventory JSON itself
+out of the body — an external path or a comment on the train PR — and leave only the head, the
+64-hex digest, and the three approval lines in the body.
+
 Immediately before landing, use the executable landing path from the clean exact train checkout:
 
 ```sh
@@ -132,5 +138,6 @@ permission to force through a moved `main`.
 ```
 
 The inventory is external operational evidence, not a commit added on top of the train. Store it
-outside the worktree or on the train PR. This preserves the invariant that the train contains only
-the constituent merge commits it claims.
+outside the worktree, or as a comment on the train PR — never in the train PR body, which must stay
+free of fenced blocks and quoted lines for the approval parser. This preserves the invariant that
+the train contains only the constituent merge commits it claims.
