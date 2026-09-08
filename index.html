@@ -221,6 +221,7 @@
   function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("on");
     clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("on"),2600); }
 
+  // GENERIC_INGEST_BEGIN — pure/local import core; tests load this shipped block.
   // ---------- schema guard (JS mirror of pipeline/schema.py:validate_doc) ----------
   // Keep in lockstep with the Python validator — it is the single source of truth for
   // the player/aligner contract. Returns null if the doc is loadable, else a short
@@ -275,7 +276,6 @@
     return tag+errs.length+" problem(s):\n  • "+errs.slice(0,8).join("\n  • ")+(errs.length>8 ? "\n  • …" : "");
   }
 
-  // GENERIC_INGEST_BEGIN — pure/local import core; tests load this shipped block.
   const GI_LIMIT={file:100*1048576,text:16000000,entries:10000,entry:32*1048576,
     total:256*1048576,xml:16*1048576,segments:250000,segment:100000,chapters:25000};
   const GI_NS={ocf:"urn:oasis:names:tc:opendocument:xmlns:container",
@@ -295,6 +295,14 @@
     if(n.endsWith(".epub")) return "epub"; return ""; }
   function genericTitle(name,format){ const ext=format==="md"?/\.(?:md|markdown)$/i:new RegExp("\\."+format+"$","i");
     const s=(name||"").replace(ext,"").trim(); return s||(format==="txt"?"Untitled text":format==="md"?"Untitled Markdown":"Untitled EPUB"); }
+  function genericRestoreSeg(value,count){return Number.isInteger(value)&&value>=0&&value<count?value:0;}
+  function commitGenericDoc(nextDoc,source,token,currentToken,commit){
+    if(token!==currentToken())return false;const bad=validateDoc(nextDoc,source);if(bad)giFail("CONTRACT",bad);
+    if(token!==currentToken())return false;commit();return true;
+  }
+  function queueGenericWrite(queue,isCurrent,write,onError){return Promise.resolve(queue).catch(()=>{}).then(async()=>{
+    if(!isCurrent())return false;try{await write();return true;}catch(e){onError(e);return false;}
+  });}
   function asBytes(input){ return input instanceof Uint8Array?input:new Uint8Array(input); }
   function decodeGenericText(input){ const b=asBytes(input); let enc="utf-8",off=0;
     if(b[0]===0xef&&b[1]===0xbb&&b[2]===0xbf) off=3;
@@ -343,9 +351,11 @@
       para.push(line.trim());i++;
     } flush(); if(!blocks.length)giFail("EMPTY","Markdown contains no prose"); return {title:genericTitle(name,"md"),blocks,chapterCandidates,warnings}; }
   function projectGeneric(book){ const kept=[],oldToNew=new Map(),drop=new Set(),cands=(book.chapterCandidates||[]).map(c=>Object.assign({},c));
-    for(const c of cands){ const bi=c.blockIndex, b=book.blocks[bi]; if(!b||b.kind!=="heading"||collapseText(b.text)!==collapseText(c.title))continue;
-      let next=-1;for(let j=bi+1;j<book.blocks.length;j++){if(book.blocks[j].resourcePath!==b.resourcePath)break;if(collapseText(book.blocks[j].text)){next=j;break;}}
-      if(next>=0){drop.add(bi);c.blockIndex=next;}else{c.drop=true;(book.warnings||[]).push("chapter heading has no following prose");} }
+    let next=-1,nextPath=null;for(let bi=book.blocks.length-1;bi>=0;bi--){const b=book.blocks[bi],path=b.resourcePath||"",text=collapseText(b.text||"");if(path!==nextPath){next=-1;nextPath=path;}if(!text)continue;
+      const mapped=cands.filter(c=>c.blockIndex===bi&&collapseText(c.title||"")===text);
+      if(b.kind==="heading"&&mapped.length){if(next>=0){drop.add(bi);for(const c of mapped)c.blockIndex=next;}else{for(const c of mapped)c.drop=true;(book.warnings||[]).push("chapter heading has no following prose");}}
+      if(!drop.has(bi))next=bi;
+    }
     for(let i=0;i<book.blocks.length;i++){if(drop.has(i))continue;const t=collapseText(book.blocks[i].text);if(!t)continue;if([...t].length>GI_LIMIT.segment)giFail("LIMIT","segment too large");oldToNew.set(i,kept.length);kept.push(t);}
     if(!kept.length)giFail("EMPTY","document contains no prose");if(kept.length>GI_LIMIT.segments)giFail("LIMIT","too many segments");
     const total=kept.reduce((n,t)=>n+[...t].length,0);if(total>GI_LIMIT.text)giFail("LIMIT","document text too large");
@@ -376,7 +386,7 @@
   function decodeXmlBytes(input){const b=asBytes(input);if(b.byteLength>GI_LIMIT.xml)giFail("LIMIT","XML resource too large");const d=decodeGenericText(b),s=d.text;let decl="";if(s.startsWith("<?xml")){const q=s.indexOf("?>");if(q<0)giFail("XML_DECL","unterminated declaration");decl=s.slice(5,q);}
     const attrs=new Map();let i=0;while(i<decl.length){while(/\s/.test(decl[i]||""))i++;if(i>=decl.length)break;let a=i;while(/[A-Za-z_:.-]/.test(decl[i]||""))i++;const k=decl.slice(a,i);while(/\s/.test(decl[i]||""))i++;if(!k||decl[i++]!== "=")giFail("XML_DECL","bad declaration");while(/\s/.test(decl[i]||""))i++;const quote=decl[i++];if(quote!=="\""&&quote!=="'")giFail("XML_DECL","bad declaration");const e=decl.indexOf(quote,i);if(e<0||attrs.has(k))giFail("XML_DECL","bad declaration");attrs.set(k,decl.slice(i,e));i=e+1;}
     const enc=attrs.get("encoding");if(enc){const x=enc.toUpperCase();if(d.encoding==="utf-8"&&x!=="UTF-8")giFail("XML_ENCODING","encoding conflict");if(d.encoding==="utf-16le"&&x!=="UTF-16"&&x!=="UTF-16LE")giFail("XML_ENCODING","encoding conflict");if(d.encoding==="utf-16be"&&x!=="UTF-16"&&x!=="UTF-16BE")giFail("XML_ENCODING","encoding conflict");}if(!d.bom&&enc&&enc.toUpperCase().startsWith("UTF-16"))giFail("XML_ENCODING","UTF-16 requires BOM");return s; }
-  function checkXmlDoctype(s,allowHtml){let i=0,count=0;while(i<s.length){if(s.startsWith("<!--",i)){const e=s.indexOf("-->",i+4);if(e<0||s.slice(i+4,e).includes("--"))giFail("XML_LEX","bad comment");i=e+3;continue;}if(s.startsWith("<![CDATA[",i)){const e=s.indexOf("]]>",i+9);if(e<0)giFail("XML_LEX","bad CDATA");i=e+3;continue;}if(s.startsWith("<?",i)){const e=s.indexOf("?>",i+2);if(e<0)giFail("XML_LEX","bad processing instruction");i=e+2;continue;}if(s.startsWith("<!",i)){let q=i+2,quote="";for(;q<s.length;q++){const c=s[q];if(quote){if(c===quote)quote="";}else if(c==="\""||c==="'")quote=c;else if(c===">")break;}if(q>=s.length)giFail("XML_LEX","unterminated declaration");const body=s.slice(i+2,q).trim(),low=body.toLowerCase();if(low.startsWith("doctype")){count++;if(!allowHtml||low!=="doctype html"||count>1)giFail("XML_DOCTYPE","unsupported DOCTYPE");}i=q+1;continue;}i++;}}
+  function checkXmlDoctype(s,allowHtml){let i=0,count=0;while(i<s.length){if(s.startsWith("<!--",i)){const e=s.indexOf("-->",i+4);if(e<0||s.slice(i+4,e).includes("--"))giFail("XML_LEX","bad comment");i=e+3;continue;}if(s.startsWith("<![CDATA[",i)){const e=s.indexOf("]]>",i+9);if(e<0)giFail("XML_LEX","bad CDATA");i=e+3;continue;}if(s.startsWith("<?",i)){const e=s.indexOf("?>",i+2);if(e<0)giFail("XML_LEX","bad processing instruction");i=e+2;continue;}if(s.startsWith("<!",i)){let q=i+2,quote="";for(;q<s.length;q++){const c=s[q];if(quote){if(c===quote)quote="";}else if(c==="\""||c==="'")quote=c;else if(c===">")break;}if(q>=s.length)giFail("XML_LEX","unterminated declaration");const body=s.slice(i+2,q).trim();if(/^doctype(?:[ \t\r\n]|$)/i.test(body)){count++;if(!allowHtml||!/^doctype[ \t\r\n]+html$/i.test(body)||count>1)giFail("XML_DOCTYPE","unsupported DOCTYPE");}i=q+1;continue;}i++;}}
   function parseXmlBytes(input,kind){const s=decodeXmlBytes(input);checkXmlDoctype(s,kind==="xhtml");let x;try{x=new DOMParser().parseFromString(s,"application/xml");}catch(e){giFail("XML_PARSE","XML parser failed");}if(x.getElementsByTagName("parsererror").length)giFail("XML_PARSE","malformed XML");return x;}
   function rejectXmlBase(x){for(const e of x.getElementsByTagName("*"))if((e.getAttributeNS(GI_NS.xml,"base")||"").trim())giFail("XML_BASE","xml:base unsupported");}
   function resolveHref(base,href){const hashes=(href.match(/#/g)||[]).length;if(hashes>1)giFail("HREF","multiple fragments");let path=href,frag=null;if(hashes){const p=href.indexOf("#");path=href.slice(0,p);frag=href.slice(p+1);if(!frag)giFail("HREF","empty fragment");}
@@ -747,7 +757,7 @@
     try{ localStorage.setItem(posKey(), JSON.stringify(mode==="text"?{seg:Math.max(0,posSeg())}:{t:audio.currentTime, seg:posSeg()})); }catch(e){}
     if(playlist) savePlaylistPos(); }
   function restore(){
-    if(mode==="text"){try{const raw=localStorage.getItem(posKey());if(raw){const o=JSON.parse(raw);if(Number.isInteger(o.seg))readingSeg=Math.max(0,Math.min(segs.length-1,o.seg));}}catch(e){}return;}
+    if(mode==="text"){try{const raw=localStorage.getItem(posKey());if(raw)readingSeg=genericRestoreSeg(JSON.parse(raw).seg,segs.length);}catch(e){}return;}
     try{
       const raw=localStorage.getItem(posKey()); if(!raw) return;
       let t=NaN, seg=-1;
@@ -778,10 +788,9 @@
       reimportStable:writeMode==="text"?sourceIdentityStable:true,
       audioName:(pendingAudioFile?pendingAudioFile.name:""), savedAt:Date.now() };
     const full = pendingAudioFile ? Object.assign({audioBlob:pendingAudioFile}, base) : base;
-    sessionWriteQueue=sessionWriteQueue.then(()=>{
-      if(writeMode==="text"&&token!==loadEpoch)return;
-      return idbSet("last",full).catch(e=>{if(writeMode==="audio"&&hasAudio)return idbSet("last",base);throw e;});
-    }).catch(()=>{toast("Opened, but resume was not saved");});
+    sessionWriteQueue=queueGenericWrite(sessionWriteQueue,()=>writeMode!=="text"||token===loadEpoch,
+      ()=>idbSet("last",full).catch(e=>{if(writeMode==="audio"&&hasAudio)return idbSet("last",base);throw e;}),
+      ()=>toast("Opened, but resume was not saved"));
     return sessionWriteQueue;
   }
   function checkResume(){
@@ -1099,12 +1108,14 @@
   function clearMediaSession(){if(!("mediaSession" in navigator))return;for(const a of ["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"])try{navigator.mediaSession.setActionHandler(a,null);}catch(e){}try{navigator.mediaSession.setPositionState();}catch(e){}try{navigator.mediaSession.playbackState="none";}catch(e){}try{navigator.mediaSession.metadata=null;}catch(e){}}
   function teardownAudioForText(){++loadToken;pendingSeek=0;pendingAutoplay=false;sleepMode="off";sleepAt=0;sleepChapterEnd=Infinity;cancelAnimationFrame(rafId);rafId=null;audio.pause();releaseWake();clearMediaSession();if(curObjUrl){URL.revokeObjectURL(curObjUrl);curObjUrl=null;}if(singleAudioObjUrl){URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=null;}audio.removeAttribute("src");try{audio.load();}catch(e){}haveAudio=false;haveSync=false;$("#audioCk").textContent="○";$("#syncCk").textContent="○";$("#startBtn").style.display="none";}
   function openTextDoc(nextDoc,identity,format,warnings,token,restored,identityStable=true){
-    if(token!==loadEpoch)return false;const bad=validateDoc(nextDoc,"generic "+format);
-    if(bad)giFail("CONTRACT",bad);mode="text";sourceIdentity=identity;sourceIdentityStable=identityStable;currentFormat=format;positionReady=false;
-    playlist=null;dbxBook=null;isDemo=false;pendingAudioFile=null;teardownAudioForText();doc=nextDoc;
-    curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();showReaderUI();
-    let seg=0;try{const raw=localStorage.getItem(posKey());if(raw){const o=JSON.parse(raw);if(Number.isInteger(o.seg))seg=Math.max(0,Math.min(segs.length-1,o.seg));}}catch(e){}
-    navigateTextSeg(seg,false,false);positionReady=true;lastSave=0;saveSession(token);
+    const committed=commitGenericDoc(nextDoc,"generic "+format,token,()=>loadEpoch,()=>{
+      mode="text";sourceIdentity=identity;sourceIdentityStable=identityStable;currentFormat=format;positionReady=false;
+      playlist=null;dbxBook=null;isDemo=false;pendingAudioFile=null;teardownAudioForText();doc=nextDoc;
+      curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();showReaderUI();
+      let seg=0;try{const raw=localStorage.getItem(posKey());if(raw)seg=genericRestoreSeg(JSON.parse(raw).seg,segs.length);}catch(e){}
+      navigateTextSeg(seg,false,false);positionReady=true;lastSave=0;
+    });
+    if(!committed)return false;saveSession(token);
     const ws=warnings||[];if(ws.length)toast("Opened with "+ws.length+" warning"+(ws.length===1?"":"s"));else if(!restored)toast("Opened text-only book");return true;
   }
   $("#genericIn").addEventListener("change",async e=>{const f=e.target.files[0];if(!f)return;const token=++loadEpoch;++loadToken;const small=$("#genericBtn small"),original=small.textContent,current=()=>{if(token!==loadEpoch)giFail("STALE_IMPORT","import superseded");};small.textContent="Opening locally…";
