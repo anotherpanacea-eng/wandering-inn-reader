@@ -64,11 +64,10 @@ test("Markdown headings map without dropping terminal content",()=>{
   assert.deepEqual(consecutive.segments.map(x=>x.text),["Body"]);
   assert.deepEqual(consecutive.chapters,[{title:"First",start:0,seg:0}]);
   const blocks=Array.from({length:10000},(_,i)=>({text:`Block ${i}`,kind:"prose",resourcePath:""}));
-  const titleOps={n:0},countedTitle=value=>({replace(...args){titleOps.n++;return value.replace(...args);}});
-  const candidates=Array.from({length:1000},(_,i)=>({title:countedTitle(`Block ${i*10}`),blockIndex:i*10,resourcePath:""}));
+  let titleReads=0;const candidates=Array.from({length:1000},(_,i)=>({get title(){titleReads++;return `Block ${i*10}`;},blockIndex:i*10,resourcePath:""}));
   const scaled=gi.projectGeneric({title:"Scale",blocks,chapterCandidates:candidates,warnings:[]});
   assert.equal(scaled.segments.length,10000);assert.equal(scaled.chapters.length,1000);
-  assert.ok(titleOps.n<=candidates.length*3,"projection work must remain linear in candidates");
+  assert.ok(titleReads<=candidates.length*3,"projection candidate access must remain linear");
 });
 
 test("stored, descriptor, and raw-deflate ZIP entries round-trip",async()=>{
