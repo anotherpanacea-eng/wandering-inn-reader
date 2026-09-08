@@ -360,7 +360,8 @@
     for(let i=0;i<book.blocks.length;i++){if(drop.has(i))continue;const t=collapseText(book.blocks[i].text);if(!t)continue;if([...t].length>GI_LIMIT.segment)giFail("LIMIT","segment too large");oldToNew.set(i,kept.length);kept.push(t);}
     if(!kept.length)giFail("EMPTY","document contains no prose");if(kept.length>GI_LIMIT.segments)giFail("LIMIT","too many segments");
     const total=kept.reduce((n,t)=>n+[...t].length,0);if(total>GI_LIMIT.text)giFail("LIMIT","document text too large");
-    const chapters=[],seen=new Set();for(const c of cands){if(c.drop)continue;const seg=oldToNew.get(c.blockIndex);const title=collapseText(c.title||"");if(seg==null||!title||seen.has(seg))continue;seen.add(seg);chapters.push({title,start:seg,seg});}
+    const chapters=[],seen=new Set();let merged=false;for(const c of cands){if(c.drop)continue;const seg=oldToNew.get(c.blockIndex);const title=collapseText(c.title||"");if(!title)continue;if(seg==null||seen.has(seg)){merged=true;continue;}seen.add(seg);chapters.push({title,start:seg,seg});}
+    if(merged)(book.warnings||[]).push("merged chapter entries that share one starting sentence");
     chapters.sort((a,b)=>a.seg-b.seg);if(chapters.length>GI_LIMIT.chapters)giFail("LIMIT","too many chapters");
     return {title:collapseText(book.title)||"Untitled",audio:"",chapters,segments:kept.map((text,i)=>({id:i,start:i,end:i+1,text}))}; }
   let crcTable=null; function crc32(bytes){ if(!crcTable){crcTable=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?0xedb88320^(c>>>1):c>>>1;crcTable[n]=c>>>0;}}
@@ -801,7 +802,10 @@
       btn.style.display="flex";
       btn.onclick=()=>{
         if(rec.mode==="text"){
-          const token=++loadEpoch;++loadToken;openTextDoc(rec.doc,rec.identity||("ephemeral:"+Date.now()),rec.format||"txt",[],token,true,rec.reimportStable!==false);return;
+          const token=++loadEpoch;++loadToken;
+          try{ openTextDoc(rec.doc,rec.identity||("ephemeral:"+Date.now()),rec.format||"txt",[],token,true,rec.reimportStable!==false); }
+          catch(err){ alert("That saved session can't be reopened ("+((err&&err.code)||"RESUME")+"):\n\n"+genericErrorMessage((err&&err.message)||err)); }
+          return;
         }
         mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++loadEpoch;++loadToken;
         doc=rec.doc;

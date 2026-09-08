@@ -64,14 +64,20 @@ test("Markdown scanner has frozen nonrecursive/literal behavior",()=>{
 });
 
 test("Markdown headings map without dropping terminal content",()=>{
-  const mid=gi.projectGeneric(gi.markdownBook(te.encode("# One\n\nBody\n\n# Last"),"b.md"));
+  const tail=gi.markdownBook(te.encode("# One\n\nBody\n\n# Last"),"b.md");
+  const mid=gi.projectGeneric(tail);
   assert.deepEqual(mid.segments.map(x=>x.text),["Body","Last"]);
   assert.deepEqual(mid.chapters,[{title:"One",start:0,seg:0}]);
+  assert.deepEqual(tail.warnings,["chapter heading has no following prose"]);
   const structural=gi.projectGeneric(gi.markdownBook(te.encode("# H\n\n- item\n  continuation\n\n> first\n> second\n\n```js\n<a> raw\n```"),"b.md"));
   assert.deepEqual(structural.segments.map(x=>x.text),["item continuation","first second","<a> raw"]);
-  const consecutive=gi.projectGeneric(gi.markdownBook(te.encode("# First\n# Second\n\nBody"),"b.md"));
+  const stacked=gi.markdownBook(te.encode("# First\n# Second\n\nBody"),"b.md");
+  const consecutive=gi.projectGeneric(stacked);
   assert.deepEqual(consecutive.segments.map(x=>x.text),["Body"]);
   assert.deepEqual(consecutive.chapters,[{title:"First",start:0,seg:0}]);
+  // Two navigation entries cannot own one starting sentence; the reader is told rather than
+  // silently losing "Second" from both the text and the chapter list.
+  assert.deepEqual(stacked.warnings,["merged chapter entries that share one starting sentence"]);
 });
 
 test("generic projection remains bounded at contract-scale dimensions",()=>{
