@@ -11,7 +11,11 @@
 # and the safe-pattern lint also run from the pre-commit hook (.githooks/pre-commit).
 set -e
 
-root="$(git rev-parse --show-toplevel)"
+# Windows Git Bash can mistranslate the absolute gitdir recorded by a linked
+# worktree when discovery begins from the POSIX-form cwd. Anchor discovery at
+# the native cwd there; ordinary shells fall back to their normal pwd.
+here="$(pwd -W 2>/dev/null || pwd)"
+root="$(git -C "$here" rev-parse --show-toplevel)"
 cd "$root"
 PYTHON="${PYTHON:-python3}"
 
@@ -35,6 +39,8 @@ echo "→ wps-gate threshold-logic test"
 "$PYTHON" tests/test_wps_check.py
 echo "→ mandatory Node no-skip gate regression"
 "$PYTHON" tests/test_node_gate.py
+echo "→ draft-first merge-train policy test"
+"$PYTHON" tests/test_merge_train.py
 
 # Player behavior is a JavaScript/security boundary, so the dependency-free Node
 # runner is mandatory and neither suite may silently skip.
