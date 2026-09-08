@@ -301,7 +301,7 @@
     if(token!==currentToken())return false;commit();return true;
   }
   function queueGenericWrite(queue,isCurrent,write,onError){return Promise.resolve(queue).catch(()=>{}).then(async()=>{
-    if(!isCurrent())return false;try{await write();return true;}catch(e){onError(e);return false;}
+    if(!isCurrent())return false;try{await write();return true;}catch(e){if(isCurrent())onError(e);return false;}
   });}
   function asBytes(input){ return input instanceof Uint8Array?input:new Uint8Array(input); }
   function decodeGenericText(input){ const b=asBytes(input); let enc="utf-8",off=0;
@@ -350,9 +350,10 @@
       if(/^(?: {4}|\t)/.test(line)){flush();const a=[];while(i<lines.length&&/^(?: {4}|\t)/.test(lines[i]))a.push(lines[i++].replace(/^(?: {4}|\t)/,""));push(a.join("\n"),"code");continue;}
       para.push(line.trim());i++;
     } flush(); if(!blocks.length)giFail("EMPTY","Markdown contains no prose"); return {title:genericTitle(name,"md"),blocks,chapterCandidates,warnings}; }
-  function projectGeneric(book){ const kept=[],oldToNew=new Map(),drop=new Set(),cands=(book.chapterCandidates||[]).map(c=>Object.assign({},c));
+  function projectGeneric(book){ const kept=[],oldToNew=new Map(),drop=new Set(),cands=[],candsAt=new Map();
+    for(const source of book.chapterCandidates||[]){const c=Object.assign({},source),entry={c,title:collapseText(c.title||"")},at=candsAt.get(c.blockIndex)||[];cands.push(c);at.push(entry);candsAt.set(c.blockIndex,at);}
     let next=-1,nextPath=null;for(let bi=book.blocks.length-1;bi>=0;bi--){const b=book.blocks[bi],path=b.resourcePath||"",text=collapseText(b.text||"");if(path!==nextPath){next=-1;nextPath=path;}if(!text)continue;
-      const mapped=cands.filter(c=>c.blockIndex===bi&&collapseText(c.title||"")===text);
+      const mapped=[];for(const x of candsAt.get(bi)||[])if(x.title===text)mapped.push(x.c);
       if(b.kind==="heading"&&mapped.length){if(next>=0){drop.add(bi);for(const c of mapped)c.blockIndex=next;}else{for(const c of mapped)c.drop=true;(book.warnings||[]).push("chapter heading has no following prose");}}
       if(!drop.has(bi))next=bi;
     }
@@ -836,7 +837,11 @@
   document.addEventListener("visibilitychange",()=>{ if(mode!=="text"&&!document.hidden && !audio.paused) acquireWake(); });
 
   // ---------- flush the saved position when leaving (throttle would otherwise drop the last move) ----------
-  function flushSave(){ if(!doc) return; save(true); }
+  function flushSave(){ if(!doc) return; clearTimeout(scrollT);
+    if(!paged && (mode==="text"||audio.paused) && !(mode!=="text"&&lastUserInput<=pausedAt)){
+      const i=segAtAnchor();if(i>=0&&i<segs.length){readingSeg=i;setPage(pageOf(i));}
+    }
+    save(true); }
   window.addEventListener("pagehide", flushSave);
   document.addEventListener("visibilitychange",()=>{ if(document.hidden) flushSave(); });
 
