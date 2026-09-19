@@ -559,7 +559,7 @@
     if(!(paged && readerReady())) return;
     const a=comfortAnchor(); restoreComfortAnchor(a);
   }
-  function setMode(m){
+  function setMode(m){ comfortSessionAnchor=null;
     const p=(m==="paged"); if(p===paged) return;
     const i=((mode==="text"||audio.paused) && readingSeg>=0) ? readingSeg : (curSeg>=0?curSeg:0);   // remember the place across the switch
     paged=p; try{ storageSet(MODE_KEY,m); }catch(e){}
@@ -590,7 +590,7 @@
     if(i<0 || i>=segs.length) return;
     readingSeg=i; setPage(pageOf(i)); save();
   }
-  function turnPage(dir){
+  function turnPage(dir){ comfortSessionAnchor=null;
     if(pages.length<2) return;
     lastUserInput=Date.now();
     const target=Math.max(0,Math.min(pages.length-1,(curPage<0?0:curPage)+dir));
@@ -834,9 +834,11 @@
 
   // ---------- display settings ----------
   const FONT_KEY="inn-reader-font", FMIN=17, FMAX=34, FDEF=25;   // preserve the original size preference
-  function fontPx(){ const v=parseInt(storageGet(FONT_KEY),10); return (v>=FMIN&&v<=FMAX)?v:FDEF; }
-  function applyFont(px){ document.documentElement.style.setProperty("--read", px+"px");
-    storageSet(FONT_KEY,String(px)); }
+  let currentFontPx=(()=>{ const v=parseInt(storageGet(FONT_KEY),10); return (v>=FMIN&&v<=FMAX)?v:FDEF; })();
+  function fontPx(){ return currentFontPx; }
+  function applyFont(px){ currentFontPx=Math.max(FMIN,Math.min(FMAX,Number(px)||FDEF));
+    document.documentElement.style.setProperty("--read", currentFontPx+"px");
+    storageSet(FONT_KEY,String(currentFontPx)); }
   const COMFORT_KEY="inn-reader-comfort-v1";
   const COMFORT_DEFAULT={font:"serif",line:"standard",measure:"standard",justify:false,hyphen:false,theme:"system",brightness:100};
   const FONT_CHOICES={
@@ -863,29 +865,34 @@
       return out;
     }catch(e){ return Object.assign({},COMFORT_DEFAULT); }
   }
-  let comfort=readComfort();
+  let comfort=readComfort(), comfortSessionAnchor=null;
   function saveComfort(){ storageSet(COMFORT_KEY,JSON.stringify(Object.assign({version:1},comfort))); }
   function segmentTextNodes(seg){
     const out=[], walk=document.createTreeWalker(seg,NodeFilter.SHOW_TEXT);
     let n; while((n=walk.nextNode())) out.push(n);
     return out;
   }
-  function rangeAtSegmentOffset(seg,nodes,offset){
+  function rangeAtSegmentChar(seg,nodes,offset){
     if(!nodes.length) return null;
-    let left=Math.max(0,Math.min(offset,nodes.reduce((n,x)=>n+x.nodeValue.length,0)));
+    const total=nodes.reduce((n,x)=>n+x.nodeValue.length,0);
+    let left=Math.max(0,Math.min(Math.max(0,total-1),offset));
     const range=document.createRange();
     for(const n of nodes){
-      if(left<=n.nodeValue.length){ range.setStart(n,left); range.collapse(true); return range; }
+      if(left<n.nodeValue.length){ range.setStart(n,left); range.setEnd(n,left+1); return range; }
       left-=n.nodeValue.length;
     }
-    const last=nodes[nodes.length-1]; range.setStart(last,last.nodeValue.length); range.collapse(true); return range;
+    return null;
+  }
+  function rangeGeometry(seg,nodes,offset){
+    const range=rangeAtSegmentChar(seg,nodes,offset); if(!range) return null;
+    const rect=range.getBoundingClientRect(); if(!rect || !rect.height) return null;
+    return {range,rect};
   }
   function rangeColumn(seg,nodes,offset){
-    const range=rangeAtSegmentOffset(seg,nodes,offset); if(!range) return null;
-    const rect=range.getBoundingClientRect(); if(!rect || !rect.height) return null;
+    const info=rangeGeometry(seg,nodes,offset); if(!info) return null;
     const rd=$("#reader"), rr=rd.getBoundingClientRect();
-    const x=rect.left-rr.left+rd.scrollLeft-colPad;
-    return {range,rect,col:colFromContentX(x,pageW)};
+    const x=info.rect.left-rr.left+rd.scrollLeft-colPad;
+    return {range:info.range,rect:info.rect,col:colFromContentX(x,pageW)};
   }
   function pagedTextAnchor(){
     const rd=$("#reader"), page=curPage>=0 ? curPage : Math.max(0,Math.round(rd.scrollLeft/(pageW||1)));
@@ -894,7 +901,7 @@
     const seg=segEls[i], nodes=segmentTextNodes(seg);
     const len=nodes.reduce((n,x)=>n+x.nodeValue.length,0);
     if(!len) return null;
-    // Collapsed Range geometry is independent of the open settings sheet/scrim.
+    // Noncollapsed character Range geometry is independent of the open settings sheet/scrim.
     // Find the first character whose visual column reaches the current page.
     let lo=0,hi=len-1,best=-1;
     while(lo<=hi){
@@ -906,14 +913,33 @@
     const info=rangeColumn(seg,nodes,best);
     return info && info.col>=page ? {kind:"text",i,offset:best,page} : null;
   }
+  function scrollTextAnchor(i){
+    const rd=$("#reader"), seg=segEls[i]; if(!seg) return null;
+    const nodes=segmentTextNodes(seg), len=nodes.reduce((n,x)=>n+x.nodeValue.length,0);
+    if(!len) return null;
+    const rr=rd.getBoundingClientRect(), target=rr.top+rd.clientHeight*.25;
+    let lo=0,hi=len-1,best=0;
+    while(lo<=hi){
+      const mid=(lo+hi)>>1, info=rangeGeometry(seg,nodes,mid);
+      if(!info){lo=mid+1;continue;}
+      if(info.rect.top<target){best=mid;lo=mid+1;} else hi=mid-1;
+    }
+    const candidates=[best,Math.min(len-1,best+1)].filter((v,j,a)=>a.indexOf(v)===j);
+    let chosen=null,dist=Infinity;
+    for(const offset of candidates){
+      const info=rangeGeometry(seg,nodes,offset); if(!info) continue;
+      const d=Math.abs(info.rect.top-target);
+      if(d<dist){dist=d;chosen={kind:"scrollText",i,offset,top:info.rect.top-rr.top};}
+    }
+    return chosen;
+  }
   function comfortAnchor(){
     if(!readerReady()) return null;
     const rd=$("#reader"), paused=(mode==="text"||audio.paused);
     let i=paused ? (paged&&pageSeg[curPage]!=null ? pageSeg[curPage] : segAtAnchor()) : (curSeg>=0 ? curSeg : 0);
     i=Math.max(0,Math.min(segs.length-1,Number.isInteger(i)?i:0));
     if(paged) return pagedTextAnchor() || {kind:"page",page:Math.max(0,curPage>=0?curPage:Math.round(rd.scrollLeft/(pageW||1)))};
-    const e=segEls[i];
-    return {kind:"scroll",i,top:e ? e.getBoundingClientRect().top-rd.getBoundingClientRect().top : null};
+    return scrollTextAnchor(i) || {kind:"scroll",i,top:segEls[i] ? segEls[i].getBoundingClientRect().top-rd.getBoundingClientRect().top : null};
   }
   function restoreComfortAnchor(a){
     if(!a || !readerReady()) return;
@@ -930,7 +956,18 @@
       setPage(p); goToCol(p,false);
     }else{
       const e=segEls[a.i];
-      if(e && a.top!=null){ const now=e.getBoundingClientRect().top-rd.getBoundingClientRect().top; rd.scrollTop+=now-a.top; }
+      let restored=false;
+      if(a.kind==="scrollText" && e){
+        const info=rangeGeometry(e,segmentTextNodes(e),a.offset);
+        if(info){
+          const now=info.rect.top-rd.getBoundingClientRect().top, sb=rd.style.scrollBehavior;
+          rd.style.scrollBehavior="auto"; rd.scrollTop+=now-a.top; rd.style.scrollBehavior=sb; restored=true;
+        }
+      }
+      if(!restored && e && a.top!=null){
+        const now=e.getBoundingClientRect().top-rd.getBoundingClientRect().top, sb=rd.style.scrollBehavior;
+        rd.style.scrollBehavior="auto"; rd.scrollTop+=now-a.top; rd.style.scrollBehavior=sb;
+      }
       setPage(pageOf(a.i));
     }
     if(mode==="text"||audio.paused) readingSeg=(a.i!=null?a.i:readingSeg);
@@ -947,9 +984,15 @@
     const meta=document.querySelector('meta[name="theme-color"]');
     if(meta) meta.setAttribute("content",THEME_COLORS[comfort.theme]|| (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? THEME_COLORS.light:THEME_COLORS.dark));
   }
+  function comfortLayoutAnchor(){
+    const paused=(mode==="text"||audio.paused);
+    if(!paused || sheetKind!=="settings") return comfortAnchor();
+    if(!comfortSessionAnchor) comfortSessionAnchor=comfortAnchor();
+    return comfortSessionAnchor;
+  }
   function setComfort(key,value){
     const layoutChange=key==="font"||key==="line"||key==="measure"||key==="justify"||key==="hyphen";
-    const a=layoutChange?comfortAnchor():null;
+    const a=layoutChange?comfortLayoutAnchor():null;
     if(key==="font" && validComfort(FONT_CHOICES,value)) comfort.font=value;
     else if(key==="line" && validComfort(LINE_CHOICES,value)) comfort.line=value;
     else if(key==="measure" && validComfort(MEASURE_CHOICES,value)) comfort.measure=value;
@@ -960,7 +1003,7 @@
     applyComfortCss(); saveComfort(); if(layoutChange) restoreComfortAnchor(a);
     if(sheetKind==="settings") renderSettings();
   }
-  function stepFont(d){ const a=comfortAnchor(); applyFont(Math.max(FMIN,Math.min(FMAX,fontPx()+d))); restoreComfortAnchor(a);
+  function stepFont(d){ const a=comfortLayoutAnchor(); applyFont(Math.max(FMIN,Math.min(FMAX,fontPx()+d))); restoreComfortAnchor(a);
     if(sheetKind==="settings") renderSettings(); }
 
   // ---------- wake lock (keep screen on while playing) ----------
@@ -1061,9 +1104,9 @@
   audio.addEventListener("ended",()=>{ if(mode!=="text"&&playlist && playlist.idx+1<playlist.tracks.length) nextTrack(); });
 
   // ---------- bottom sheet ----------
-  function openSheet(kind){ sheetKind=kind; (kind==="chapters"?renderChapters:renderSettings)();
+  function openSheet(kind){ if(kind==="settings") comfortSessionAnchor=null; sheetKind=kind; (kind==="chapters"?renderChapters:renderSettings)();
     $("#scrim").classList.add("on"); $("#sheet").classList.add("on"); }
-  function closeSheet(){ sheetKind=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on"); }
+  function closeSheet(){ comfortSessionAnchor=null; sheetKind=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on"); }
   $("#scrim").onclick=closeSheet;
   $("#chaptersBtn").onclick=()=>openSheet("chapters");
   $("#settingsBtn").onclick=()=>openSheet("settings");
@@ -1277,7 +1320,7 @@
   });
 
   applyComfortCss();
-  function showReaderUI(){
+  function showReaderUI(){ comfortSessionAnchor=null;
     applyComfortCss();
     applyFont(fontPx()); if(mode!=="text"){applyRate();setupMediaSession();}
     $("#load").style.display="none";
