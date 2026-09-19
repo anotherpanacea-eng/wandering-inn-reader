@@ -14,13 +14,17 @@
   :root{
     --bg:#11140f; --panel:#1a1e16; --ink:#e9e6da; --dim:#8d927f;
     --warm:#e7b75f; --warm-soft:#3a3320; --line:#2a2f24; --tap:#222a1c;
-    --read: 1.55rem; --lh: 1.85;
+    --read: 1.55rem; --lh: 1.85; --read-font: Georgia,"Times New Roman",serif; --read-pad: 20px; --dim-alpha: 0;
     --col-pad: 22px; --col-w: 30rem;     /* paginated mode: side padding + per-column width (set in JS) */
   }
   @media (prefers-color-scheme: light){
     :root{ --bg:#f6f3ea; --panel:#fffdf6; --ink:#23251d; --dim:#6c6f5e;
            --warm:#9a6b14; --warm-soft:#f0e3c4; --line:#e4ddc8; --tap:#efe9d8; }
   }
+  :root[data-theme="light"]{--bg:#f6f3ea;--panel:#fffdf6;--ink:#23251d;--dim:#6c6f5e;--warm:#9a6b14;--warm-soft:#f0e3c4;--line:#e4ddc8;--tap:#efe9d8;}
+  :root[data-theme="sepia"]{--bg:#f1e6cf;--panel:#f8efd9;--ink:#3b2b1d;--dim:#76634d;--warm:#98631e;--warm-soft:#ead7b1;--line:#d8c5a0;--tap:#ead9ba;}
+  :root[data-theme="dark"]{--bg:#11140f;--panel:#1a1e16;--ink:#e9e6da;--dim:#8d927f;--warm:#e7b75f;--warm-soft:#3a3320;--line:#2a2f24;--tap:#222a1c;}
+  :root[data-theme="oled"]{--bg:#000;--panel:#080808;--ink:#f2f2f2;--dim:#999;--warm:#f0c45b;--warm-soft:#28210f;--line:#252525;--tap:#181818;}
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0; height:100%;}
   body{
@@ -53,15 +57,18 @@
   #nowChap{flex:1; text-align:center; font:600 .9rem/1.2 Georgia,serif; color:var(--dim);
            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 4px;}
   /* ---- reader ---- */
-  #reader{flex:1; position:relative; overflow-y:auto; padding:18px 20px 40vh; display:none; scroll-behavior:smooth;
+  #reader{flex:1; position:relative; overflow-y:auto; padding:18px var(--read-pad) 40vh; display:none; scroll-behavior:smooth;
           -webkit-overflow-scrolling:touch;}
   #reader.on{display:block;}
-  #docTitle{font:600 1.15rem/1.3 Georgia,serif; color:var(--dim); margin:6px 2px 20px; letter-spacing:.01em;}
-  .chap{font:600 1.08rem/1.3 Georgia,serif; color:var(--warm); margin:1.7em 2px .85em; padding-top:.5em;
+  #reader,#reader .chap,#reader #docTitle{font-family:var(--read-font);}
+  #docTitle{font:600 1.15rem/1.3 var(--read-font); color:var(--dim); margin:6px 2px 20px; letter-spacing:.01em;}
+  .chap{font:600 1.08rem/1.3 var(--read-font); color:var(--warm); margin:1.7em 2px .85em; padding-top:.5em;
         border-top:1px solid var(--line); cursor:pointer;}
   .chap.first{border-top:none; padding-top:0; margin-top:.2em;}
   .seg{display:block; font-size:var(--read); line-height:var(--lh); margin:0 0 1.05em;
-       color:var(--dim); transition:color .25s ease; cursor:pointer; font-family:Georgia,"Times New Roman",serif;}
+       color:var(--dim); transition:color .25s ease; cursor:pointer; font-family:var(--read-font);}
+  #reader.justified .seg{text-align:justify;}
+  #reader.hyphenate .seg{hyphens:auto;-webkit-hyphens:auto;overflow-wrap:break-word;}
   .seg.read{color:var(--ink);}            /* already heard */
   .seg.cur{color:var(--ink);}             /* current sentence */
   .seg .w{transition:color .1s linear;}
@@ -94,6 +101,7 @@
   /* ---- bottom sheet (chapters / settings) ---- */
   #scrim{position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; z-index:5;}
   #scrim.on{display:block;}
+  #comfortDimmer{position:fixed;inset:0;background:#000;opacity:var(--dim-alpha);pointer-events:none;z-index:4;}
   #sheet{position:fixed; left:0; right:0; bottom:0; z-index:6; background:var(--panel);
          border-top:1px solid var(--line); border-radius:18px 18px 0 0;
          padding:8px 16px calc(20px + env(safe-area-inset-bottom)); max-height:74vh; overflow-y:auto;
@@ -168,6 +176,7 @@
   </div>
 </footer>
 
+<div id="comfortDimmer" aria-hidden="true"></div>
 <div id="scrim"></div>
 <div id="sheet"></div>
 <div id="toast"></div>
@@ -179,6 +188,10 @@
   const $ = s => document.querySelector(s);
   const audio = new Audio();
   audio.preload = "metadata";
+  // Storage is optional: private browsing, quota, or a user policy must never block the reader.
+  function storageGet(key){ try{return window.localStorage.getItem(key);}catch(e){return null;} }
+  function storageSet(key,value){ try{window.localStorage.setItem(key,value);return true;}catch(e){return false;} }
+  function storageRemove(key){ try{window.localStorage.removeItem(key);}catch(e){} }
   let doc=null, segs=[], segEls=[], segStart=[], curSeg=-1, curWordEls=null, rafId=null;
   let chapters=[], chapBySeg={}, curChap=-1;
   let follow=true, userScrollPause=0, isDemo=false, pendingAudioFile=null;
@@ -188,7 +201,7 @@
   let readingSeg=-1;                        // segment at the reading anchor while paused; -1 = no divergence
   // reading mode: false = vertical scroll (default), true = left-right pagination (CSS columns)
   const MODE_KEY="inn-reader-mode";
-  let paged = (localStorage.getItem(MODE_KEY)==="paged");
+  let paged = (storageGet(MODE_KEY)==="paged");
   let segPage=[], pageW=0, colPad=0, relayoutT=0, pgFollowWord=-1;   // paged geometry: segPage[i]=start column; pageW=px/page; pgFollowWord=last word the page followed
   let lastUserInput=0, scrollT=0, pendingReadSeg=-1, pausedAt=0;
   let playlist=null, pendingSeek=0, pendingAutoplay=false;   // continuous multi-track book
@@ -544,13 +557,12 @@
   }
   function relayoutPaged(){                          // re-measure + keep the current place on screen
     if(!(paged && readerReady())) return;
-    const i=((mode==="text"||audio.paused) && readingSeg>=0) ? readingSeg : (curSeg>=0?curSeg:0);
-    buildPagesPaged(); const p=pageOf(i); setPage(p); goToCol(p,false);
+    const a=comfortAnchor(); restoreComfortAnchor(a);
   }
   function setMode(m){
     const p=(m==="paged"); if(p===paged) return;
     const i=((mode==="text"||audio.paused) && readingSeg>=0) ? readingSeg : (curSeg>=0?curSeg:0);   // remember the place across the switch
-    paged=p; try{ localStorage.setItem(MODE_KEY,m); }catch(e){}
+    paged=p; try{ storageSet(MODE_KEY,m); }catch(e){}
     const rd=$("#reader"); syncReaderMode();
     const sb=rd.style.scrollBehavior; rd.style.scrollBehavior="auto"; rd.scrollLeft=0; rd.scrollTop=0; rd.style.scrollBehavior=sb;
     if(paged){ buildPagesPaged(); const pg=pageOf(i); setPage(pg); goToCol(pg,false); }
@@ -756,12 +768,12 @@
   let lastSave=0;
   function posSeg(){ return ((mode==="text"||audio.paused) && readingSeg>=0) ? readingSeg : curSeg; }
   function save(force){ if(!positionReady)return;const n=Date.now(); if(!force&&n-lastSave<1500) return; lastSave=n;
-    try{ localStorage.setItem(posKey(), JSON.stringify(mode==="text"?{seg:Math.max(0,posSeg())}:{t:audio.currentTime, seg:posSeg()})); }catch(e){}
+    try{ storageSet(posKey(), JSON.stringify(mode==="text"?{seg:Math.max(0,posSeg())}:{t:audio.currentTime, seg:posSeg()})); }catch(e){}
     if(playlist) savePlaylistPos(); }
   function restore(){
-    if(mode==="text"){try{const raw=localStorage.getItem(posKey());if(raw)readingSeg=genericRestoreSeg(JSON.parse(raw).seg,segs.length);}catch(e){}return;}
+    if(mode==="text"){try{const raw=storageGet(posKey());if(raw)readingSeg=genericRestoreSeg(JSON.parse(raw).seg,segs.length);}catch(e){}return;}
     try{
-      const raw=localStorage.getItem(posKey()); if(!raw) return;
+      const raw=storageGet(posKey()); if(!raw) return;
       let t=NaN, seg=-1;
       if(raw.charAt(0)==="{"){ const o=JSON.parse(raw); t=+o.t; if(typeof o.seg==="number") seg=o.seg; }
       else { t=parseFloat(raw); }                       // legacy: bare seconds
@@ -820,22 +832,97 @@
     }).catch(()=>{});
   }
 
-  // ---------- display settings (font size) ----------
-  const FONT_KEY="inn-reader-font", FMIN=17, FMAX=34, FDEF=25;   // px (≈ the 1.55rem default)
-  function fontPx(){ const v=parseInt(localStorage.getItem(FONT_KEY),10); return (v>=FMIN&&v<=FMAX)?v:FDEF; }
+  // ---------- display settings ----------
+  const FONT_KEY="inn-reader-font", FMIN=17, FMAX=34, FDEF=25;   // preserve the original size preference
+  function fontPx(){ const v=parseInt(storageGet(FONT_KEY),10); return (v>=FMIN&&v<=FMAX)?v:FDEF; }
   function applyFont(px){ document.documentElement.style.setProperty("--read", px+"px");
-    try{ localStorage.setItem(FONT_KEY,String(px)); }catch(e){} }
-  function stepFont(d){ applyFont(Math.max(FMIN,Math.min(FMAX,fontPx()+d))); relayoutPaged();
+    storageSet(FONT_KEY,String(px)); }
+  const COMFORT_KEY="inn-reader-comfort-v1";
+  const COMFORT_DEFAULT={font:"serif",line:"standard",measure:"standard",justify:false,hyphen:false,theme:"system",brightness:100};
+  const FONT_CHOICES={
+    serif:{label:"Serif",css:'Georgia,"Times New Roman",serif'},
+    sans:{label:"Sans",css:'-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif'},
+    dyslexic:{label:"Dyslexic (if available)",css:'OpenDyslexic,"Atkinson Hyperlegible",Arial,sans-serif'}
+  };
+  const LINE_CHOICES={compact:{label:"Compact",value:"1.55"},standard:{label:"Standard",value:"1.85"},relaxed:{label:"Relaxed",value:"2.1"}};
+  const MEASURE_CHOICES={narrow:{label:"Narrow",pad:"12px",colPad:"14px"},standard:{label:"Standard",pad:"20px",colPad:"22px"},wide:{label:"Wide",pad:"32px",colPad:"34px"}};
+  const THEME_COLORS={light:"#f6f3ea",sepia:"#f1e6cf",dark:"#11140f",oled:"#000"};
+  const validComfort=(v,k)=>Object.prototype.hasOwnProperty.call(v,k);
+  function readComfort(){
+    try{
+      const v=JSON.parse(storageGet(COMFORT_KEY)||"null");
+      if(!v || v.version!==1 || typeof v!=="object") return Object.assign({},COMFORT_DEFAULT);
+      const out=Object.assign({},COMFORT_DEFAULT);
+      if(typeof v.font==="string" && validComfort(FONT_CHOICES,v.font)) out.font=v.font;
+      if(typeof v.line==="string" && validComfort(LINE_CHOICES,v.line)) out.line=v.line;
+      if(typeof v.measure==="string" && validComfort(MEASURE_CHOICES,v.measure)) out.measure=v.measure;
+      if(typeof v.justify==="boolean") out.justify=v.justify;
+      if(typeof v.hyphen==="boolean") out.hyphen=v.hyphen;
+      if(typeof v.theme==="string" && (v.theme==="system" || validComfort(THEME_COLORS,v.theme))) out.theme=v.theme;
+      if(Number.isInteger(v.brightness) && v.brightness>=70 && v.brightness<=100 && v.brightness%10===0) out.brightness=v.brightness;
+      return out;
+    }catch(e){ return Object.assign({},COMFORT_DEFAULT); }
+  }
+  let comfort=readComfort();
+  function saveComfort(){ storageSet(COMFORT_KEY,JSON.stringify(Object.assign({version:1},comfort))); }
+  function comfortAnchor(){
+    if(!readerReady()) return null;
+    const rd=$("#reader"), paused=(mode==="text"||audio.paused);
+    // Read the visible location first while paused/text-only; this keeps manual browsing
+    // authoritative even when the saved audio cursor points somewhere older.
+    let i=paused ? (paged&&pageSeg[curPage]!=null ? pageSeg[curPage] : segAtAnchor()) : (curSeg>=0 ? curSeg : 0);
+    i=Math.max(0,Math.min(segs.length-1,Number.isInteger(i)?i:0));
+    if(paged) return {i,paged:true};
+    const e=segEls[i];
+    return {i,paged:false,top:e ? e.getBoundingClientRect().top-rd.getBoundingClientRect().top : null};
+  }
+  function restoreComfortAnchor(a){
+    if(!a || !readerReady()) return;
+    const rd=$("#reader");
+    if(a.paged){
+      buildPagesPaged(); const p=pageOf(a.i); setPage(p); goToCol(p,false);
+    }else{
+      const e=segEls[a.i];
+      if(e && a.top!=null){ const now=e.getBoundingClientRect().top-rd.getBoundingClientRect().top; rd.scrollTop+=now-a.top; }
+      setPage(pageOf(a.i));
+    }
+    if(mode==="text"||audio.paused) readingSeg=a.i;
+  }
+  function applyComfortCss(){
+    const root=document.documentElement, f=FONT_CHOICES[comfort.font]||FONT_CHOICES.serif;
+    root.style.setProperty("--read-font",f.css);
+    root.style.setProperty("--lh",LINE_CHOICES[comfort.line].value);
+    root.style.setProperty("--read-pad",MEASURE_CHOICES[comfort.measure].pad);
+    root.style.setProperty("--col-pad",MEASURE_CHOICES[comfort.measure].colPad);
+    root.style.setProperty("--dim-alpha",String((100-comfort.brightness)/100));
+    if(comfort.theme==="system") root.removeAttribute("data-theme"); else root.setAttribute("data-theme",comfort.theme);
+    const r=$("#reader"); if(r){r.classList.toggle("justified",comfort.justify);r.classList.toggle("hyphenate",comfort.hyphen);}
+    const meta=document.querySelector('meta[name="theme-color"]');
+    if(meta) meta.setAttribute("content",THEME_COLORS[comfort.theme]|| (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? THEME_COLORS.light:THEME_COLORS.dark));
+  }
+  function setComfort(key,value){
+    const a=comfortAnchor();
+    if(key==="font" && validComfort(FONT_CHOICES,value)) comfort.font=value;
+    else if(key==="line" && validComfort(LINE_CHOICES,value)) comfort.line=value;
+    else if(key==="measure" && validComfort(MEASURE_CHOICES,value)) comfort.measure=value;
+    else if(key==="justify" && typeof value==="boolean") comfort.justify=value;
+    else if(key==="hyphen" && typeof value==="boolean") comfort.hyphen=value;
+    else if(key==="theme" && (value==="system" || validComfort(THEME_COLORS,value))) comfort.theme=value;
+    else if(key==="brightness" && Number.isInteger(value) && value>=70 && value<=100) comfort.brightness=value;
+    applyComfortCss(); saveComfort(); restoreComfortAnchor(a);
+    if(sheetKind==="settings") renderSettings();
+  }
+  function stepFont(d){ const a=comfortAnchor(); applyFont(Math.max(FMIN,Math.min(FMAX,fontPx()+d))); restoreComfortAnchor(a);
     if(sheetKind==="settings") renderSettings(); }
 
   // ---------- wake lock (keep screen on while playing) ----------
   const WAKE_KEY="inn-reader-wake";
-  let wakeLock=null, keepAwake = localStorage.getItem(WAKE_KEY)==="1";
+  let wakeLock=null, keepAwake = storageGet(WAKE_KEY)==="1";
   function acquireWake(){ if(!keepAwake || !("wakeLock" in navigator) || document.hidden) return;
     navigator.wakeLock.request("screen").then(w=>{ wakeLock=w;
       w.addEventListener("release",()=>{ wakeLock=null; }); }).catch(()=>{}); }
   function releaseWake(){ if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; } }
-  function toggleWake(){ keepAwake=!keepAwake; try{ localStorage.setItem(WAKE_KEY, keepAwake?"1":"0"); }catch(e){}
+  function toggleWake(){ keepAwake=!keepAwake; try{ storageSet(WAKE_KEY, keepAwake?"1":"0"); }catch(e){}
     if(keepAwake && !audio.paused) acquireWake(); else releaseWake();
     if(sheetKind==="settings") renderSettings(); }
   document.addEventListener("visibilitychange",()=>{ if(mode!=="text"&&!document.hidden && !audio.paused) acquireWake(); });
@@ -886,9 +973,9 @@
   $("#prevChap").onclick=()=>skipChapter(-1);
   $("#nextChap").onclick=()=>skipChapter(1);
   const rates=[0.8,1,1.25,1.5,2], RATE_KEY="inn-reader-rate";
-  let ri=(()=>{ const v=parseInt(localStorage.getItem(RATE_KEY),10); return (v>=0&&v<rates.length)?v:1; })();
+  let ri=(()=>{ const v=parseInt(storageGet(RATE_KEY),10); return (v>=0&&v<rates.length)?v:1; })();
   function applyRate(){ audio.playbackRate=rates[ri]; $("#rate").textContent=rates[ri]+"×";
-    try{ localStorage.setItem(RATE_KEY,String(ri)); }catch(e){} }
+    try{ storageSet(RATE_KEY,String(ri)); }catch(e){} }
   $("#rate").onclick=()=>{ if(mode==="text")return;ri=(ri+1)%rates.length; applyRate(); };
   $("#follow").onclick=()=>{ if(mode==="text")return;follow=!follow; $("#follow").classList.toggle("act",follow);
     if(follow && curSeg>=0){ if(paged) goToCol(pageOf(curSeg),true);
@@ -971,6 +1058,14 @@
     s.appendChild(srow("Reading mode","scroll down, or turn pages",
       [ chip("Scroll", !paged, ()=>setMode("scroll")), chip("Pages", paged, ()=>setMode("paged")) ]));
     s.appendChild(srow("Text size", null, [ chip("A−",false,()=>stepFont(-2)), chip("A+",false,()=>stepFont(2)) ]));
+    s.appendChild(srow("Font family",null,Object.entries(FONT_CHOICES).map(([v,o])=>chip(o.label,comfort.font===v,()=>setComfort("font",v)))));
+    s.appendChild(srow("Line spacing",null,Object.entries(LINE_CHOICES).map(([v,o])=>chip(o.label,comfort.line===v,()=>setComfort("line",v)))));
+    s.appendChild(srow("Margins / measure","width of the reading column",
+      Object.entries(MEASURE_CHOICES).map(([v,o])=>chip(o.label,comfort.measure===v,()=>setComfort("measure",v)))));
+    s.appendChild(srow("Alignment",null,[chip("Ragged",!comfort.justify,()=>setComfort("justify",false)),chip("Justified",comfort.justify,()=>setComfort("justify",true))]));
+    s.appendChild(srow("Hyphenation","best effort, when supported",[chip("Off",!comfort.hyphen,()=>setComfort("hyphen",false)),chip("Auto",comfort.hyphen,()=>setComfort("hyphen",true))]));
+    s.appendChild(srow("Theme",null,["system","light","sepia","dark","oled"].map(v=>chip(v==="system"?"System":v==="oled"?"OLED":v[0].toUpperCase()+v.slice(1),comfort.theme===v,()=>setComfort("theme",v)))));
+    s.appendChild(srow("Brightness","in-app dimmer",[100,90,80,70].map(v=>chip(v+"%",comfort.brightness===v,()=>setComfort("brightness",v)))));
     if(mode==="text")return;
     s.appendChild(srow("Keep screen on","while playing", [ chip(keepAwake?"On":"Off", keepAwake, toggleWake) ]));
     const sl=[["off","Off"],["15","15m"],["30","30m"],["45","45m"],["chapter","Chapter"]];
@@ -1073,10 +1168,10 @@
 
   function plKey(book){ return "inn-reader-book:"+book; }
   function savePlaylistPos(){ if(!playlist) return;
-    try{ localStorage.setItem(plKey(playlist.book),
+    try{ storageSet(plKey(playlist.book),
       JSON.stringify({idx:playlist.idx, t:audio.currentTime||0, seg:posSeg(), n:playlist.tracks.length, ts:Date.now()})); }catch(e){}
     dbxSchedulePosSave(); }   // also push to the user's Dropbox if this is a Dropbox-loaded book (cross-device place)
-  function loadPlaylistPos(book){ try{ return JSON.parse(localStorage.getItem(plKey(book))||"null"); }catch(e){ return null; } }
+  function loadPlaylistPos(book){ try{ return JSON.parse(storageGet(plKey(book))||"null"); }catch(e){ return null; } }
 
   function startBook(files){
     const epoch=++loadEpoch;++loadToken;
@@ -1121,7 +1216,7 @@
       mode="text";sourceIdentity=identity;sourceIdentityStable=identityStable;currentFormat=format;positionReady=false;
       playlist=null;dbxBook=null;isDemo=false;pendingAudioFile=null;teardownAudioForText();doc=nextDoc;
       curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();showReaderUI();
-      let seg=0;try{const raw=localStorage.getItem(posKey());if(raw)seg=genericRestoreSeg(JSON.parse(raw).seg,segs.length);}catch(e){}
+      let seg=0;try{const raw=storageGet(posKey());if(raw)seg=genericRestoreSeg(JSON.parse(raw).seg,segs.length);}catch(e){}
       navigateTextSeg(seg,false,false);positionReady=true;lastSave=0;
     });
     if(!committed)return false;saveSession(token);
@@ -1133,7 +1228,9 @@
     finally{if(token===loadEpoch){small.textContent=original;e.target.value="";}}
   });
 
+  applyComfortCss();
   function showReaderUI(){
+    applyComfortCss();
     applyFont(fontPx()); if(mode!=="text"){applyRate();setupMediaSession();}
     $("#load").style.display="none";
     $("#top").classList.add("on"); $("#reader").classList.add("on"); $("#bar").classList.toggle("on",mode!=="text");
@@ -1151,7 +1248,7 @@
   // ---------- Dropbox loader (App-folder scope, OAuth 2 PKCE, all client-side) ----------
   // The app key is a PUBLIC client_id (not a secret). Tokens are minted in THIS browser and kept in
   // localStorage only — never committed. "App folder" access means a token can read ONLY /Apps/Inn Reader/.
-  const DBX = { key: localStorage.getItem("dbx-appkey") || "vk8flkkycqe19fw",
+  const DBX = { key: storageGet("dbx-appkey") || "vk8flkkycqe19fw",
                 redirect: location.origin + location.pathname, tok: null, exp: 0 };
   const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf)))
                           .replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
@@ -1173,15 +1270,15 @@
   async function dbxExchange(code){
     const d = await dbxTokenPost({ code, grant_type:"authorization_code",
       code_verifier: sessionStorage.getItem("dbx-verifier"), client_id: DBX.key, redirect_uri: DBX.redirect });
-    if(d.refresh_token) localStorage.setItem("dbx-refresh", d.refresh_token);
+    if(d.refresh_token) storageSet("dbx-refresh", d.refresh_token);
     DBX.tok = d.access_token; DBX.exp = Date.now() + (d.expires_in-60)*1000;
     sessionStorage.removeItem("dbx-verifier");
   }
   async function dbxToken(){
     if(DBX.tok && Date.now() < DBX.exp) return DBX.tok;
-    const rt = localStorage.getItem("dbx-refresh"); if(!rt) throw new Error("not connected");
+    const rt = storageGet("dbx-refresh"); if(!rt) throw new Error("not connected");
     let d; try{ d = await dbxTokenPost({ grant_type:"refresh_token", refresh_token: rt, client_id: DBX.key }); }
-    catch(e){ localStorage.removeItem("dbx-refresh"); throw e; }
+    catch(e){ storageRemove("dbx-refresh"); throw e; }
     DBX.tok = d.access_token; DBX.exp = Date.now() + (d.expires_in-60)*1000; return DBX.tok;
   }
   async function dbxRpc(path, body){
@@ -1302,7 +1399,7 @@
   $("#dbxBtn").onclick = async () => {
     try {
       dbxMsg("Connecting to Dropbox…");                     // immediate feedback so a click is never silent
-      if(localStorage.getItem("dbx-refresh")) await dbxBrowse();
+      if(storageGet("dbx-refresh")) await dbxBrowse();
       else await dbxAuthStart();                            // -> redirects to Dropbox (or throws, caught below)
     } catch(e){ dbxMsg("Dropbox error: "+((e && e.message) || e)); }
   };
