@@ -865,28 +865,75 @@
   }
   let comfort=readComfort();
   function saveComfort(){ storageSet(COMFORT_KEY,JSON.stringify(Object.assign({version:1},comfort))); }
+  function segmentTextNodes(seg){
+    const out=[], walk=document.createTreeWalker(seg,NodeFilter.SHOW_TEXT);
+    let n; while((n=walk.nextNode())) out.push(n);
+    return out;
+  }
+  function rangeAtSegmentOffset(seg,nodes,offset){
+    if(!nodes.length) return null;
+    let left=Math.max(0,Math.min(offset,nodes.reduce((n,x)=>n+x.nodeValue.length,0)));
+    const range=document.createRange();
+    for(const n of nodes){
+      if(left<=n.nodeValue.length){ range.setStart(n,left); range.collapse(true); return range; }
+      left-=n.nodeValue.length;
+    }
+    const last=nodes[nodes.length-1]; range.setStart(last,last.nodeValue.length); range.collapse(true); return range;
+  }
+  function rangeColumn(seg,nodes,offset){
+    const range=rangeAtSegmentOffset(seg,nodes,offset); if(!range) return null;
+    const rect=range.getBoundingClientRect(); if(!rect || !rect.height) return null;
+    const rd=$("#reader"), rr=rd.getBoundingClientRect();
+    const x=rect.left-rr.left+rd.scrollLeft-colPad;
+    return {range,rect,col:colFromContentX(x,pageW)};
+  }
+  function pagedTextAnchor(){
+    const rd=$("#reader"), page=curPage>=0 ? curPage : Math.max(0,Math.round(rd.scrollLeft/(pageW||1)));
+    const i=pageSeg[page];
+    if(!Number.isInteger(i)||!segEls[i]) return null;
+    const seg=segEls[i], nodes=segmentTextNodes(seg);
+    const len=nodes.reduce((n,x)=>n+x.nodeValue.length,0);
+    if(!len) return null;
+    // Collapsed Range geometry is independent of the open settings sheet/scrim.
+    // Find the first character whose visual column reaches the current page.
+    let lo=0,hi=len-1,best=-1;
+    while(lo<=hi){
+      const mid=(lo+hi)>>1, info=rangeColumn(seg,nodes,mid);
+      if(!info){lo=mid+1;continue;}
+      if(info.col<page) lo=mid+1; else {best=mid;hi=mid-1;}
+    }
+    if(best<0) return null;
+    const info=rangeColumn(seg,nodes,best);
+    return info && info.col>=page ? {kind:"text",i,offset:best,page} : null;
+  }
   function comfortAnchor(){
     if(!readerReady()) return null;
     const rd=$("#reader"), paused=(mode==="text"||audio.paused);
-    // Read the visible location first while paused/text-only; this keeps manual browsing
-    // authoritative even when the saved audio cursor points somewhere older.
     let i=paused ? (paged&&pageSeg[curPage]!=null ? pageSeg[curPage] : segAtAnchor()) : (curSeg>=0 ? curSeg : 0);
     i=Math.max(0,Math.min(segs.length-1,Number.isInteger(i)?i:0));
-    if(paged) return {i,paged:true};
+    if(paged) return pagedTextAnchor() || {kind:"page",page:Math.max(0,curPage>=0?curPage:Math.round(rd.scrollLeft/(pageW||1)))};
     const e=segEls[i];
-    return {i,paged:false,top:e ? e.getBoundingClientRect().top-rd.getBoundingClientRect().top : null};
+    return {kind:"scroll",i,top:e ? e.getBoundingClientRect().top-rd.getBoundingClientRect().top : null};
   }
   function restoreComfortAnchor(a){
     if(!a || !readerReady()) return;
     const rd=$("#reader");
-    if(a.paged){
-      buildPagesPaged(); const p=pageOf(a.i); setPage(p); goToCol(p,false);
+    if(paged){
+      buildPagesPaged();
+      let p=-1;
+      if(a.kind==="text" && segEls[a.i]){
+        const info=rangeColumn(segEls[a.i],segmentTextNodes(segEls[a.i]),a.offset);
+        if(info) p=info.col;
+      }
+      if(p<0) p=a.kind==="page"?a.page:-1;
+      p=Math.max(0,Math.min(Math.max(0,pages.length-1),Number.isFinite(p)?p:0));
+      setPage(p); goToCol(p,false);
     }else{
       const e=segEls[a.i];
       if(e && a.top!=null){ const now=e.getBoundingClientRect().top-rd.getBoundingClientRect().top; rd.scrollTop+=now-a.top; }
       setPage(pageOf(a.i));
     }
-    if(mode==="text"||audio.paused) readingSeg=a.i;
+    if(mode==="text"||audio.paused) readingSeg=(a.i!=null?a.i:readingSeg);
   }
   function applyComfortCss(){
     const root=document.documentElement, f=FONT_CHOICES[comfort.font]||FONT_CHOICES.serif;
@@ -901,7 +948,8 @@
     if(meta) meta.setAttribute("content",THEME_COLORS[comfort.theme]|| (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? THEME_COLORS.light:THEME_COLORS.dark));
   }
   function setComfort(key,value){
-    const a=comfortAnchor();
+    const layoutChange=key==="font"||key==="line"||key==="measure"||key==="justify"||key==="hyphen";
+    const a=layoutChange?comfortAnchor():null;
     if(key==="font" && validComfort(FONT_CHOICES,value)) comfort.font=value;
     else if(key==="line" && validComfort(LINE_CHOICES,value)) comfort.line=value;
     else if(key==="measure" && validComfort(MEASURE_CHOICES,value)) comfort.measure=value;
@@ -909,7 +957,7 @@
     else if(key==="hyphen" && typeof value==="boolean") comfort.hyphen=value;
     else if(key==="theme" && (value==="system" || validComfort(THEME_COLORS,value))) comfort.theme=value;
     else if(key==="brightness" && Number.isInteger(value) && value>=70 && value<=100) comfort.brightness=value;
-    applyComfortCss(); saveComfort(); restoreComfortAnchor(a);
+    applyComfortCss(); saveComfort(); if(layoutChange) restoreComfortAnchor(a);
     if(sheetKind==="settings") renderSettings();
   }
   function stepFont(d){ const a=comfortAnchor(); applyFont(Math.max(FMIN,Math.min(FMAX,fontPx()+d))); restoreComfortAnchor(a);
