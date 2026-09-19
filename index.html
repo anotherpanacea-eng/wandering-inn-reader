@@ -459,12 +459,12 @@
     if(readerWired) return; readerWired=true;
     const r=$("#reader");
     r.addEventListener("scroll",onReaderScroll,{passive:true});
-    r.addEventListener("wheel",()=>{ lastUserInput=Date.now(); },{passive:true});
-    r.addEventListener("pointerdown",()=>{ lastUserInput=Date.now(); },{passive:true});
+    r.addEventListener("wheel",()=>{ comfortSessionAnchor=null; lastUserInput=Date.now(); },{passive:true});
+    r.addEventListener("pointerdown",()=>{ comfortSessionAnchor=null; lastUserInput=Date.now(); },{passive:true});
     r.addEventListener("click",onTap);
     let tsx=0,tsy=0,tst=0;
     r.addEventListener("touchstart",e=>{ const t=e.changedTouches[0]; tsx=t.clientX; tsy=t.clientY;
-      tst=Date.now(); lastUserInput=tst; },{passive:true});
+      tst=Date.now(); comfortSessionAnchor=null; lastUserInput=tst; },{passive:true});
     r.addEventListener("touchend",e=>{ const t=e.changedTouches[0], dx=t.clientX-tsx, dy=t.clientY-tsy;
       if(Date.now()-tst<600 && Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.6) turnPage(dx<0?1:-1); },{passive:true});
   }
@@ -1060,8 +1060,8 @@
     audio.play();
   }
   $("#play").onclick=()=>{ if(mode==="text")return;if(audio.paused){resumePlay();} else {audio.pause();} };
-  $("#back").onclick=()=>{ if(mode!=="text")audio.currentTime=Math.max(0,audio.currentTime-15); };
-  $("#fwd").onclick =()=>{ if(mode!=="text")audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+15); };
+  $("#back").onclick=()=>{ if(mode!=="text"){comfortSessionAnchor=null;audio.currentTime=Math.max(0,audio.currentTime-15); }};
+  $("#fwd").onclick =()=>{ if(mode!=="text"){comfortSessionAnchor=null;audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+15); }};
   $("#prevChap").onclick=()=>skipChapter(-1);
   $("#nextChap").onclick=()=>skipChapter(1);
   const rates=[0.8,1,1.25,1.5,2], RATE_KEY="inn-reader-rate";
@@ -1072,18 +1072,19 @@
   $("#follow").onclick=()=>{ if(mode==="text")return;follow=!follow; $("#follow").classList.toggle("act",follow);
     if(follow && curSeg>=0){ if(paged) goToCol(pageOf(curSeg),true);
       else if(segEls[curSeg]) segEls[curSeg].scrollIntoView({block:"center",behavior:"smooth"}); } };
-  $("#seek").oninput=e=>{ if(mode!=="text"&&audio.duration){ audio.currentTime=e.target.value/1000*audio.duration; } };
+  $("#seek").oninput=e=>{ if(mode!=="text"&&audio.duration){ comfortSessionAnchor=null; audio.currentTime=e.target.value/1000*audio.duration; } };
 
-  audio.addEventListener("play",()=>{ if(mode==="text"){audio.pause();return;}$("#play").textContent="❚❚";
+  audio.addEventListener("play",()=>{ comfortSessionAnchor=null; if(mode==="text"){audio.pause();return;}$("#play").textContent="❚❚";
     if("mediaSession" in navigator) navigator.mediaSession.playbackState="playing";
     acquireWake(); cancelAnimationFrame(rafId); rafId=requestAnimationFrame(tick); });
-  audio.addEventListener("pause",()=>{ if(mode==="text")return;$("#play").textContent="▶";
+  audio.addEventListener("pause",()=>{ comfortSessionAnchor=null; if(mode==="text")return;$("#play").textContent="▶";
     if("mediaSession" in navigator) navigator.mediaSession.playbackState="paused";
     readingSeg=-1; pausedAt=Date.now();  // fresh pause: no divergence until a post-pause reader gesture
     releaseWake(); save(); });
-  audio.addEventListener("seeked",()=>{ if(mode==="text")return;const t=audio.currentTime; readingSeg=-1;  // explicit audio move
+  audio.addEventListener("seeked",()=>{ comfortSessionAnchor=null; if(mode==="text")return;const t=audio.currentTime; readingSeg=-1;  // explicit audio move
     setSeg(findSeg(t)); setWord(t); setChap(t);
     $("#cur").textContent=fmt(t); updatePosition(); });
+  audio.addEventListener("seeking",()=>{ comfortSessionAnchor=null; });
   audio.addEventListener("loadedmetadata",()=>{ if(mode==="text")return;$("#dur").textContent=fmt(audio.duration);
     if(playlist){ let st=Math.min(pendingSeek||0, (audio.duration||1e9)-0.1);
       if(pendingReadSeg>=0 && pendingReadSeg<segs.length && pendingReadSeg!==findSeg(st))
