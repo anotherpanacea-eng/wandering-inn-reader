@@ -986,7 +986,8 @@
   }
   function comfortLayoutAnchor(){
     const paused=(mode==="text"||audio.paused);
-    if(!paused || sheetKind!=="settings") return comfortAnchor();
+    if(!paused){ comfortSessionAnchor=null; return comfortAnchor(); }
+    if(sheetKind!=="settings"){ comfortSessionAnchor=null; return comfortAnchor(); }
     if(!comfortSessionAnchor) comfortSessionAnchor=comfortAnchor();
     return comfortSessionAnchor;
   }
