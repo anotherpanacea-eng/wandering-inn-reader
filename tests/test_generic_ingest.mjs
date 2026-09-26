@@ -353,3 +353,5 @@ test("stable identity and position keys isolate same-title generic books",async(
   const fallback=await gi.genericIdentityResult(te.encode("one"),"txt",null);
   assert.equal(fallback.stable,false);assert.match(fallback.identity,/^ephemeral:[0-9a-f]{32}$/);
 });
+
+await import('./test_library.mjs');

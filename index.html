@@ -127,6 +127,17 @@
      background:rgba(0,0,0,.82); color:#fff; padding:10px 15px; border-radius:11px; font-size:.85rem;
      z-index:8; display:none; max-width:82vw; text-align:center;}
   #toast.on{display:block;}
+  #load{justify-content:flex-start;overflow:auto;}
+  #library{width:min(100%,720px);margin:16px 0;}
+  #libraryStatus{max-width:none;font-size:.85rem;}
+  #shelf{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-top:12px;}
+  .book-card{display:flex;gap:12px;padding:12px;border:1px solid var(--line);border-radius:12px;min-width:0;}
+  .book-cover{width:72px;min-width:72px;height:104px;overflow:hidden;background:var(--panel);padding:5px;font:600 .8rem/1.3 Georgia,serif;overflow-wrap:anywhere;}
+  .book-cover img{width:100%;height:100%;object-fit:contain;}
+  .book-info{min-width:0;flex:1;overflow-wrap:anywhere;}.book-info .btn{padding:4px 0;border:0;display:block;text-align:left;}
+  .book-info small{display:block;color:var(--dim);font-size:.75rem;}.book-progress{font-size:.8rem;}
+  #bookStatus{display:none;padding:2px 14px;font-size:.7rem;color:var(--dim);}
+  body:has(#reader.on) #bookStatus:not(:empty){display:block;}
 </style>
 </head>
 <body>
@@ -136,6 +147,7 @@
     <h1>Inn Reader</h1>
     <p>Listen to the narration and read the same words, in sync, on your phone.</p>
   </div>
+  <section id="library" aria-label="Saved books"><h2>Your library</h2><p id="libraryStatus" role="status"></p><div id="shelf"></div></section>
   <div class="pick">
     <button class="btn primary" id="resumeBtn" style="display:none;">▶ Resume<small id="resumeName"></small></button>
     <button class="btn primary" id="tryDemo">▶ Try the demo<small>A short sample, no files needed</small></button>
@@ -154,6 +166,7 @@
 </section>
 
 <header id="top">
+  <button class="tbtn" id="libraryBtn" title="Library" aria-label="Library">▤</button>
   <button class="tbtn" id="chaptersBtn" title="Chapters" aria-label="Chapters">☰</button>
   <button class="tbtn" id="prevChap" title="Previous chapter" aria-label="Previous chapter">⏮</button>
   <div id="nowChap"></div>
@@ -161,6 +174,7 @@
   <button class="tbtn" id="settingsBtn" title="Display &amp; timer" aria-label="Settings">Aa</button>
 </header>
 
+<div id="bookStatus" role="status"></div>
 <main id="reader"></main>
 
 <footer id="bar">
@@ -420,11 +434,13 @@
   function navDomModel(x){rejectXmlBase(x);localNameRoot(x,GI_NS.xhtml,"html");const toc=[...x.getElementsByTagNameNS(GI_NS.xhtml,"nav")].find(e=>(e.getAttributeNS(GI_NS.epub,"type")||"").split(/\s+/).includes("toc"));if(!toc)giFail("EPUB_NAV","missing TOC nav");const candidates=[];for(const li of toc.getElementsByTagNameNS(GI_NS.xhtml,"li")){const a=[...li.children].find(e=>e.namespaceURI===GI_NS.xhtml&&e.localName==="a");if(!a)continue;const label=collapseText(a.textContent||""),href=a.getAttribute("href")||"";if(label&&href)candidates.push({label,href});}return {toc:true,candidates};}
   function selectOpfPath(model,hasEntry){const rf=(model.rootfiles||[]).find(r=>r.mediaType==="application/oebps-package+xml");if(!rf)giFail("EPUB_CONTAINER","no OPF rootfile");if(!rf.fullPath.trim())giFail("EPUB_CONTAINER","blank OPF rootfile");const r=resolveHref("root",rf.fullPath);if(r.fragment)giFail("EPUB_CONTAINER","rootfile fragment unsupported");if(!hasEntry(r.path))giFail("EPUB_RESOURCE","missing "+r.path);return r.path;}
   function assembleOpfModel(model,op,name,hasEntry){const ver=(model.version||"").trim();if(!(ver==="3"||(/^3\.\d+$/.test(ver))))giFail("EPUB_VERSION","EPUB 3 required");if((model.metas||[]).some(m=>(m.property||"").trim()==="rendition:layout"&&collapseText(m.text||"")==="pre-paginated"))giFail("EPUB_SPINE","fixed-layout package unsupported");const manifest=new Map(),resources=new Set();let nav=null;for(const it of model.items||[]){const id=it.id,href=it.href,media=it.media,props=(it.properties||"").trim().split(/\s+/).filter(Boolean);if(!id||!id.trim()||manifest.has(id))giFail("EPUB_MANIFEST","duplicate or blank manifest id");if(!href||!href.trim())giFail("EPUB_MANIFEST","blank manifest href");if(it.fallback)giFail("EPUB_FALLBACK","fallback unsupported");if(props.includes("scripted"))giFail("EPUB_MANIFEST","scripted resource unsupported");const r=resolveHref(op,href);if(r.fragment)giFail("EPUB_MANIFEST","manifest fragment unsupported");if(!hasEntry(r.path))giFail("EPUB_RESOURCE","missing "+r.path);if(resources.has(r.path))giFail("EPUB_MANIFEST","duplicate resource");resources.add(r.path);const m={id,path:r.path,media,props};manifest.set(id,m);if(props.includes("nav")){if(nav)giFail("EPUB_NAV","multiple nav items");nav=m;}}
-    if(!nav||nav.media!=="application/xhtml+xml")giFail("EPUB_NAV","missing EPUB 3 nav");const spine=[],seen=new Set(),warnings=[];for(const ir of model.spine||[]){const id=ir.idref,m=manifest.get(id);if(!m)giFail("EPUB_SPINE","missing idref");if(seen.has(id))giFail("EPUB_SPINE","duplicate idref");seen.add(id);if(ir.linear.trim()==="no"){warnings.push("skipped non-linear spine item");continue;}if(m.media!=="application/xhtml+xml"||m.props.includes("rendition:layout-pre-paginated")||m.props.includes("scripted"))giFail("EPUB_SPINE","unsupported spine item");spine.push(m);}if(!spine.length)giFail("EPUB_SPINE","empty linear spine");return {title:(model.titles||[]).map(collapseText).find(Boolean)||genericTitle(name,"epub"),nav,spine,warnings};}
+    if(!nav||nav.media!=="application/xhtml+xml")giFail("EPUB_NAV","missing EPUB 3 nav");const spine=[],seen=new Set(),warnings=[];for(const ir of model.spine||[]){const id=ir.idref,m=manifest.get(id);if(!m)giFail("EPUB_SPINE","missing idref");if(seen.has(id))giFail("EPUB_SPINE","duplicate idref");seen.add(id);if(ir.linear.trim()==="no"){warnings.push("skipped non-linear spine item");continue;}if(m.media!=="application/xhtml+xml"||m.props.includes("rendition:layout-pre-paginated")||m.props.includes("scripted"))giFail("EPUB_SPINE","unsupported spine item");spine.push(m);}if(!spine.length)giFail("EPUB_SPINE","empty linear spine");return {covers:[...manifest.values()].filter(m=>m.props.includes("cover-image")),title:(model.titles||[]).map(collapseText).find(Boolean)||genericTitle(name,"epub"),nav,spine,warnings};}
   function assembleEpubBook(pkg,resourceModels,navModel){const blocks=[],byPath=new Map(),warnings=pkg.warnings.slice();for(const m of pkg.spine){const ex=resourceModels.get(m.path);if(!ex)giFail("EPUB_RESOURCE","missing parsed "+m.path);const base=blocks.length;for(const b of ex.blocks||[])blocks.push(Object.assign({},b,{resourcePath:m.path}));const anchors=new Map();for(const a of ex.anchors||[]){if(anchors.has(a.id))giFail("ANCHOR","duplicate anchor");anchors.set(a.id,a.blockIndex<0?-1:base+a.blockIndex);}byPath.set(m.path,{first:(ex.blocks||[]).length?base:-1,anchors});}if(!blocks.length)giFail("EMPTY","spine contains no prose");if(!navModel||navModel.toc!==true)giFail("EPUB_NAV","missing TOC nav");const chapterCandidates=[];for(const c of navModel.candidates||[]){const href=c.href,label=collapseText(c.label||"");if(!label||!href)continue;if(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)||href.startsWith("//")){warnings.push("ignored external TOC link");continue;}const r=resolveHref(pkg.nav.path,href),target=byPath.get(r.path);if(!target){warnings.push("ignored non-linear TOC link");continue;}const bi=r.fragment==null?target.first:target.anchors.get(r.fragment);if(bi==null||bi<0){warnings.push("ignored unresolved TOC link");continue;}chapterCandidates.push({title:label,resourcePath:r.path,blockIndex:bi});}if(!chapterCandidates.length)warnings.push("navigation has no usable chapters");return {title:pkg.title,blocks,chapterCandidates,warnings};}
   async function epubBook(input,name,checkCurrent){const zip=parseZip(input),actual={n:0},cache=new Map(),hasEntry=path=>{const z=zip.names.get(path);return !!z&&!z.dir;},get=async(path)=>{giCurrent(checkCurrent);const z=zip.names.get(path);if(!z||z.dir)giFail("EPUB_RESOURCE","missing "+path);if(!cache.has(path))cache.set(path,readZipEntry(zip,z,actual,checkCurrent));try{const out=await cache.get(path);giCurrent(checkCurrent);return out;}catch(e){cache.delete(path);throw e;}};
-    const cx=parseXmlBytes(await get("META-INF/container.xml"),"container");giCurrent(checkCurrent);const op=selectOpfPath(containerDomModel(cx),hasEntry),ox=parseXmlBytes(await get(op),"opf");giCurrent(checkCurrent);const pkg=assembleOpfModel(opfDomModel(ox),op,name,hasEntry),resources=new Map();for(const m of pkg.spine){const x=parseXmlBytes(await get(m.path),"xhtml");giCurrent(checkCurrent);rejectXmlBase(x);resources.set(m.path,epubTextBlocks(x,m.path));}const nx=parseXmlBytes(await get(pkg.nav.path),"xhtml");giCurrent(checkCurrent);const book=assembleEpubBook(pkg,resources,navDomModel(nx));giCurrent(checkCurrent);return book;}
-  async function genericDocFromBytes(input,name,checkCurrent){const b=asBytes(input);if(b.length>GI_LIMIT.file)giFail("LIMIT","selected file is too large");giCurrent(checkCurrent);const f=genericFormat(name);if(!f)giFail("FORMAT","unsupported file extension");const book=f==="txt"?txtBook(b,name):f==="md"?markdownBook(b,name):await epubBook(b,name,checkCurrent);giCurrent(checkCurrent);return {format:f,doc:projectGeneric(book),warnings:book.warnings||[]}; }
+    const cx=parseXmlBytes(await get("META-INF/container.xml"),"container");giCurrent(checkCurrent);const op=selectOpfPath(containerDomModel(cx),hasEntry),ox=parseXmlBytes(await get(op),"opf");giCurrent(checkCurrent);const pkg=assembleOpfModel(opfDomModel(ox),op,name,hasEntry),resources=new Map();for(const m of pkg.spine){const x=parseXmlBytes(await get(m.path),"xhtml");giCurrent(checkCurrent);rejectXmlBase(x);resources.set(m.path,epubTextBlocks(x,m.path));}const nx=parseXmlBytes(await get(pkg.nav.path),"xhtml");giCurrent(checkCurrent);const book=assembleEpubBook(pkg,resources,navDomModel(nx));
+    for(const m of pkg.covers){try{const entry=zip.names.get(m.path);if(entry.size>5242880)continue;const cover=await admittedCover(await get(m.path),m.media);giCurrent(checkCurrent);if(cover){book.cover=cover;break;}}catch(e){giCurrent(checkCurrent);}}
+    giCurrent(checkCurrent);return book;}
+  async function genericDocFromBytes(input,name,checkCurrent){const b=asBytes(input);if(b.length>GI_LIMIT.file)giFail("LIMIT","selected file is too large");giCurrent(checkCurrent);const f=genericFormat(name);if(!f)giFail("FORMAT","unsupported file extension");const book=f==="txt"?txtBook(b,name):f==="md"?markdownBook(b,name):await epubBook(b,name,checkCurrent);giCurrent(checkCurrent);return {format:f,doc:projectGeneric(book),warnings:book.warnings||[],cover:book.cover||null}; }
   // GENERIC_INGEST_END
 
   // ---------- render ----------
@@ -582,7 +598,7 @@
     clearTimeout(scrollT); scrollT=setTimeout(captureReadingPos,160);
   }
   function captureReadingPos(){
-    if(paged) return;                       // paged mode: the reading place comes from turnPage, not vertical scroll
+    if(paged || !$("#reader").classList.contains("on")) return; // paged mode: the reading place comes from turnPage, not vertical scroll
     // capture only on a real reader gesture made *after* the pause — so neither the cold-open
     // restore scroll nor a follow/seek scroll still settling from before the pause can hijack it.
     if((mode!=="text"&&!audio.paused) || (mode!=="text"&&lastUserInput<=pausedAt)) return;
@@ -621,7 +637,7 @@
   function navigateTextSeg(i,smooth,doSave){
     if(mode!=="text"||!segs.length) return; i=Math.max(0,Math.min(segs.length-1,Number.isInteger(i)?i:0));
     readingSeg=i; curSeg=-1; setSeg(i); setChap(segs[i].start); const p=pageOf(i); setPage(p);
-    if(paged) goToCol(p,!!smooth); else {const e=segEls[i];if(e)$("#reader").scrollTo({top:Math.max(0,e.offsetTop-12),behavior:smooth?"smooth":"auto"});}
+    if(paged) goToCol(p,!!smooth); else {const e=segEls[i];if(e){const reader=$("#reader"),behavior=reader.style.scrollBehavior;if(!smooth)reader.style.scrollBehavior="auto";reader.scrollTo({top:Math.max(0,e.offsetTop-12),behavior:smooth?"smooth":"instant"});reader.style.scrollBehavior=behavior;}}
     if(doSave) save(true);
   }
 
@@ -768,6 +784,7 @@
   let lastSave=0;
   function posSeg(){ return ((mode==="text"||audio.paused) && readingSeg>=0) ? readingSeg : curSeg; }
   function save(force){ if(!positionReady)return;const n=Date.now(); if(!force&&n-lastSave<1500) return; lastSave=n;
+    if(mode==="text"){saveBookPosition();return;}
     try{ storageSet(posKey(), JSON.stringify(mode==="text"?{seg:Math.max(0,posSeg())}:{t:audio.currentTime, seg:posSeg()})); }catch(e){}
     if(playlist) savePlaylistPos(); }
   function restore(){
@@ -783,53 +800,198 @@
     }catch(e){}
   }
 
-  // ---------- session store (IndexedDB) for one-tap resume ----------
-  const DB="inn-reader", STORE="session";
-  function idb(){ return new Promise((res,rej)=>{ let r; try{ r=indexedDB.open(DB,1); }catch(e){ return rej(e); }
-    r.onupgradeneeded=()=>{ if(!r.result.objectStoreNames.contains(STORE)) r.result.createObjectStore(STORE); };
-    r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
-  function idbSet(k,v){ return idb().then(db=>new Promise((res,rej)=>{
-    const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(v,k);
-    tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); tx.onabort=()=>rej(tx.error||new Error("aborted")); })); }
-  function idbGet(k){ return idb().then(db=>new Promise((res,rej)=>{
-    const tx=db.transaction(STORE,"readonly"); const rq=tx.objectStore(STORE).get(k);
-    rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error); })); }
-
-  function saveSession(token){
-    if(isDemo || !doc) return;
-    const writeMode=mode,hasAudio=!!pendingAudioFile;
-    const base={ doc, mode:writeMode, identity:sourceIdentity, format:currentFormat,
-      reimportStable:writeMode==="text"?sourceIdentityStable:true,
-      audioName:(pendingAudioFile?pendingAudioFile.name:""), savedAt:Date.now() };
-    const full = pendingAudioFile ? Object.assign({audioBlob:pendingAudioFile}, base) : base;
-    sessionWriteQueue=queueGenericWrite(sessionWriteQueue,()=>writeMode!=="text"||token===loadEpoch,
-      ()=>idbSet("last",full).catch(e=>{if(writeMode==="audio"&&hasAudio)return idbSet("last",base);throw e;}),
-      ()=>toast("Opened, but resume was not saved"));
-    return sessionWriteQueue;
+  // LIBRARY_BEGIN
+  function libraryRecordValid(r){
+    return !!r && r.version===1 && typeof r.identity==="string" && !!r.identity &&
+      ["txt","md","epub"].includes(r.format) && typeof r.reimportStable==="boolean" &&
+      Number.isFinite(r.importedAt) && r.importedAt>=0 && Number.isFinite(r.lastReadAt) && r.lastReadAt>=0 &&
+      !validateDoc(r.doc,"saved book");
   }
-  function checkResume(){
-    idbGet("last").then(rec=>{
-      if(!rec || !rec.doc) return;
-      const btn=$("#resumeBtn"); $("#resumeName").textContent=(rec.doc.title||"last session")+(rec.mode==="text"&&rec.reimportStable===false?" · session-only identity":"");
-      btn.style.display="flex";
-      btn.onclick=()=>{
-        if(rec.mode==="text"){
-          const token=++loadEpoch;++loadToken;
-          try{ openTextDoc(rec.doc,rec.identity||("ephemeral:"+Date.now()),rec.format||"txt",[],token,true,rec.reimportStable!==false); }
-          catch(err){ alert("That saved session can't be reopened ("+((err&&err.code)||"RESUME")+"):\n\n"+genericErrorMessage((err&&err.message)||err)); }
-          return;
+  function libraryProgress(r){
+    if(!libraryRecordValid(r))return 0;
+    const at=genericRestoreSeg(r.position&&r.position.seg,r.doc.segments.length);
+    let total=0,before=0;
+    r.doc.segments.forEach((s,i)=>{const n=(s.text.match(/\S+/g)||[]).length;total+=n;if(i<at)before+=n;});
+    return total?Math.min(99,Math.floor(100*before/total)):0;
+  }
+  // Header bounds precede browser decoding; unsupported variants simply have no cover.
+  function coverHeader(input,media){
+    const b=new Uint8Array(input),v=new DataView(b.buffer,b.byteOffset,b.byteLength);
+    if(!b.length||b.length>5242880)return null;
+    const str=(p,n)=>String.fromCharCode(...b.subarray(p,p+n));
+    let width=0,height=0;
+    if(media==="image/png"){
+      if(b.length<33||!b.subarray(0,8).every((x,i)=>x===[137,80,78,71,13,10,26,10][i])||v.getUint32(8)!==13||str(12,4)!=="IHDR")return null;
+      width=v.getUint32(16);height=v.getUint32(20);
+      let p=8,ended=false;
+      while(p+12<=b.length){const n=v.getUint32(p),tag=str(p+4,4);if(n>b.length-p-12||tag==="acTL")return null;p+=12+n;if(tag==="IEND"){ended=p===b.length;break;}}
+      if(!ended)return null;
+    }else if(media==="image/jpeg"){
+      if(b.length<4||b[0]!==255||b[1]!==216)return null;
+      let p=2;
+      while(p<b.length){if(b[p++]!==255)return null;while(b[p]===255)p++;const tag=b[p++];if(tag===217||tag===218)break;if(tag===1||(tag>=208&&tag<=215))continue;if(p+2>b.length)return null;const n=v.getUint16(p);if(n<2||p+n>b.length)return null;
+        if([192,193,194].includes(tag)){if(n<8)return null;height=v.getUint16(p+3);width=v.getUint16(p+5);break;}p+=n;}
+    }else if(media==="image/webp"){
+      if(b.length<20||str(0,4)!=="RIFF"||str(8,4)!=="WEBP"||v.getUint32(4,true)!==b.length-8)return null;
+      let p=12,canvas=null,payload=null;
+      while(p+8<=b.length){const tag=str(p,4),n=v.getUint32(p+4,true),q=p+8;if(n>b.length-q||tag==="ANIM"||tag==="ANMF")return null;
+        if(tag==="VP8X"){
+          if(canvas||p!==12||n!==10||(b[q]&2))return null;
+          canvas={width:1+b[q+4]+(b[q+5]<<8)+(b[q+6]<<16),height:1+b[q+7]+(b[q+8]<<8)+(b[q+9]<<16)};
+        }else if(tag==="VP8 "||tag==="VP8L"){
+          if(payload)return null;
+          if(tag==="VP8 "){if(n<10||b[q+3]!==157||b[q+4]!==1||b[q+5]!==42)return null;payload={width:v.getUint16(q+6,true)&16383,height:v.getUint16(q+8,true)&16383};}
+          else{if(n<5||b[q]!==47)return null;const bits=v.getUint32(q+1,true);payload={width:(bits&16383)+1,height:((bits>>>14)&16383)+1};}
         }
-        mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++loadEpoch;++loadToken;
-        doc=rec.doc;
-        if(rec.audioBlob){ isDemo=false; pendingAudioFile=rec.audioBlob;   // keep the blob persisted on re-save
-          if(singleAudioObjUrl)URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=URL.createObjectURL(rec.audioBlob);audio.src=singleAudioObjUrl;open(); }
-        else {            // text-only resume: pre-load sync, ask for just the audio file
-          haveSync=true; $("#syncCk").textContent="●"; $("#syncName").textContent=doc.title;
-          $("#audioName").textContent="re-select: "+(rec.audioName||"your audio file");
-          btn.style.display="none"; toast("Pick the audio file to finish resuming");
+        p=q+n+(n&1);
+      }
+      if(p!==b.length||!payload||(canvas&&(canvas.width!==payload.width||canvas.height!==payload.height)))return null;
+      ({width,height}=payload);
+    }else return null;
+    return Number.isInteger(width)&&Number.isInteger(height)&&width>0&&height>0&&width*height<=16000000?{width,height}:null;
+  }
+  async function admittedCover(bytes,media){
+    const size=coverHeader(bytes,media);if(!size)return null;
+    const blob=new Blob([bytes],{type:media});
+    try{const bitmap=await createImageBitmap(blob);const ok=bitmap.width===size.width&&bitmap.height===size.height;bitmap.close();return ok?blob:null;}catch(e){return null;}
+  }
+  function createLibraryStore(openDb,readLegacyPosition){
+    // Connections are short-lived, avoiding upgrade deadlocks and stale handles.
+    async function transaction(mode,body){
+      const db=await openDb();return new Promise((resolve,reject)=>{
+        let tx,value,failure;try{tx=db.transaction(["books","session"],mode);}catch(e){db.close();reject(e);return;}
+        const fail=e=>{failure=e;try{tx.abort();}catch(x){}};
+        const read=(store,key,fn)=>{const q=tx.objectStore(store).get(key);q.onsuccess=()=>{try{fn(q.result);}catch(e){fail(e);}};};
+        tx.oncomplete=()=>{db.close();resolve(value);};tx.onabort=()=>{db.close();reject(failure||tx.error||new Error("Storage transaction aborted"));};
+        tx.onerror=()=>{};
+        try{body(tx,read,v=>{value=v;},fail);}catch(e){fail(e);}
+      });
+    }
+    const valid=r=>{if(!libraryRecordValid(r))throw new Error("Saved book is unreadable; delete it or import it again");return r;};
+    const position=(r,seg)=>({seg:genericRestoreSeg(seg,r.doc.segments.length)});
+    return {
+      migrate:()=>transaction("readwrite",(tx,read,done)=>read("session","library-migration",mark=>{
+        if(mark)return done(mark);
+        read("session","last",legacy=>read("session","resume",selector=>{
+          const session=tx.objectStore("session"),finish=(kind,id)=>{const mark={version:1,kind};session.put(mark,"library-migration");if(!selector&&kind==="text")session.put({kind:"text",identity:id},"resume");else if(!selector&&kind==="audio")session.put({kind:"audio"},"resume");done(mark);};
+          if(!legacy||legacy.mode!=="text"||validateDoc(legacy.doc,"legacy")){finish(legacy&&legacy.mode!=="text"&&legacy.doc?"audio":"empty");return;}
+          const id=typeof legacy.identity==="string"&&legacy.identity?legacy.identity:"legacy:"+Date.now()+":"+Math.random();
+          read("books",id,old=>{if(!old){const now=Date.now(),r={version:1,identity:id,format:["txt","md","epub"].includes(legacy.format)?legacy.format:"txt",reimportStable:!!legacy.identity&&legacy.reimportStable!==false,doc:legacy.doc,importedAt:now,lastReadAt:now,cover:null};r.position=position(r,readLegacyPosition(id));tx.objectStore("books").put(r);}finish("text",id);});
+        }));
+      })),
+      list:()=>transaction("readonly",(tx,read,done)=>{const q=tx.objectStore("books").getAll();q.onsuccess=()=>done(q.result);}),
+      get:id=>transaction("readonly",(tx,read,done)=>read("books",id,done)),
+      admit:(record,current=()=>true)=>transaction("readwrite",(tx,read,done)=>{
+        valid(record);read("books",record.identity,old=>{
+          if(!current())return done(null);
+          const now=Date.now(),r={...record,importedAt:old&&libraryRecordValid(old)?old.importedAt:now,lastReadAt:now};
+          r.position=position(r,old&&libraryRecordValid(old)?old.position&&old.position.seg:readLegacyPosition(r.identity));
+          tx.objectStore("books").put(r);tx.objectStore("session").put({kind:"text",identity:r.identity},"resume");done(r);
+        });
+      }),
+      open:(id,current=()=>true)=>transaction("readwrite",(tx,read,done)=>read("books",id,r=>{
+        if(!r)return done(null);valid(r);if(!current())return done(null);r.lastReadAt=Date.now();r.position=position(r,r.position&&r.position.seg);
+        tx.objectStore("books").put(r);tx.objectStore("session").put({kind:"text",identity:id},"resume");done(r);
+      })),
+      position:(id,seg)=>transaction("readwrite",(tx,read,done)=>read("books",id,r=>{
+        if(!r)return done(false);valid(r);r.position=position(r,seg);r.lastReadAt=Date.now();tx.objectStore("books").put(r);done(true);
+      })),
+      remove:id=>transaction("readwrite",(tx,read,done)=>{
+        tx.objectStore("books").delete(id);read("session","resume",r=>{if(r&&r.kind==="text"&&r.identity===id)tx.objectStore("session").delete("resume");done(true);});
+      }),
+      resume:()=>transaction("readonly",(tx,read,done)=>read("session","resume",r=>{
+        if(r&&r.kind==="text")read("books",r.identity,b=>done(b?{kind:"text",record:valid(b)}:null));
+        else if(r&&r.kind==="audio")read("session","last",a=>done(a&&a.mode!=="text"?{kind:"audio",record:a}:null));else done(null);
+      })),
+      saveAudio:record=>transaction("readwrite",(tx,read,done)=>{tx.objectStore("session").put(record,"last");tx.objectStore("session").put({kind:"audio"},"resume");done(true);})
+    };
+  }
+  // LIBRARY_END
+
+  // ---------- local library and audio session store ----------
+  const DB="inn-reader", STORE="session";
+  let blockedUpgrade=false;
+  function idb(){return new Promise((resolve,reject)=>{
+    if(blockedUpgrade){reject(new Error("Close other reader tabs to upgrade saved books"));return;}
+    let r,blocked=false;try{r=indexedDB.open(DB,2);}catch(e){reject(e);return;}
+    r.onupgradeneeded=()=>{for(const name of [STORE,"books"])if(!r.result.objectStoreNames.contains(name))r.result.createObjectStore(name,name==="books"?{keyPath:"identity"}:undefined);};
+    r.onblocked=()=>{blocked=true;blockedUpgrade=true;reject(new Error("Close other reader tabs to upgrade saved books"));};
+    r.onerror=()=>{if(blocked)blockedUpgrade=false;reject(r.error);};
+    r.onsuccess=()=>{if(blocked)blockedUpgrade=false;const db=r.result;db.onversionchange=()=>db.close();if(blocked){db.close();return;}resolve(db);};
+  });}
+  function legacyPosition(id){try{return JSON.parse(storageGet(genericPositionKey("text",id,""))||"null")?.seg;}catch(e){return 0;}}
+  const library=createLibraryStore(idb,legacyPosition);
+  let libraryReady=null,librarySaved=false,shelfGeneration=0,shelfUrls=[];
+  function ensureLibrary(){if(!libraryReady)libraryReady=library.migrate().catch(e=>{libraryReady=null;throw e;});return libraryReady;}
+  function libraryMessage(message){$("#libraryStatus").textContent=message;}
+  function bookSavedStatus(saved,message){librarySaved=saved;$("#bookStatus").textContent=message||(saved?"Saved on this device":"Not saved on this device");}
+  function queueLibrary(action){const result=sessionWriteQueue.catch(()=>{}).then(action);sessionWriteQueue=result.catch(()=>{});return result;}
+  function saveBookPosition(){
+    const id=sourceIdentity,seg=Math.max(0,posSeg());if(!librarySaved)return;
+    queueLibrary(()=>library.position(id,seg)).then(ok=>{if(mode==="text"&&sourceIdentity===id&&!ok)bookSavedStatus(false,"No longer saved on this device");}).catch(()=>{
+      if(mode==="text"&&sourceIdentity===id)bookSavedStatus(false,"Latest place not saved; reopen from the library to retry");
+    });
+  }
+  function releaseShelf(){shelfGeneration++;for(const url of shelfUrls)URL.revokeObjectURL(url);shelfUrls=[];clear($("#shelf"));}
+  async function renderShelf(){
+    releaseShelf();const generation=shelfGeneration;
+    try{await ensureLibrary();const records=await library.list();if(generation!==shelfGeneration)return;
+      records.sort((a,b)=>(Number.isFinite(b.lastReadAt)?b.lastReadAt:0)-(Number.isFinite(a.lastReadAt)?a.lastReadAt:0)||String(a.identity).localeCompare(String(b.identity)));
+      libraryMessage(records.length?"Books saved on this device. Browser storage can be cleared; keep your source files.":"No saved books yet. Import a text file or EPUB below.");
+      for(const r of records){
+        const valid=libraryRecordValid(r),title=typeof r.doc?.title==="string"?r.doc.title:"Unreadable saved book";
+        const cover=el("div",{class:"book-cover",text:title});
+        if(valid&&r.cover instanceof Blob&&r.cover.size<=5242880&&["image/png","image/jpeg","image/webp"].includes(r.cover.type)){
+          // Stored blobs are mutable browser data too: recheck before decode/render.
+          const blob=await admittedCover(await r.cover.arrayBuffer(),r.cover.type);if(generation!==shelfGeneration)return;
+          if(blob){const url=URL.createObjectURL(blob);shelfUrls.push(url);clear(cover);cover.appendChild(el("img",{src:url,alt:"",loading:"lazy"}));}
         }
+        const openButton=el("button",{class:"btn",text:title,"data-action":"open","aria-label":"Open "+title,onclick:()=>openSavedBook(r.identity)});
+        if(!valid)openButton.disabled=true;
+        const detail=valid?r.format.toUpperCase()+" · Last read "+new Date(r.lastReadAt).toLocaleString()+(r.reimportStable?"":" · reimport creates a new copy"):"Unreadable record — remove it or import the source again";
+        const info=el("div",{class:"book-info"},[openButton,el("small",{text:detail})]);
+        if(valid)info.appendChild(el("p",{class:"book-progress",text:libraryProgress(r)+"% read (approx.)",title:"Approximate reading progress from your saved place"}));
+        info.appendChild(el("button",{class:"chip",text:"Delete","data-action":"delete","aria-label":"Delete "+title,onclick:async()=>{
+          if(!confirm('Delete "'+title+'" from this device?'))return;
+          try{await queueLibrary(()=>library.remove(r.identity));if(mode==="text"&&sourceIdentity===r.identity)bookSavedStatus(false,"No longer saved on this device");await renderShelf();await checkResume();}
+          catch(e){libraryMessage("Deletion did not complete. Your saved books were kept. "+genericErrorMessage(e.message));}
+        }}));
+        $("#shelf").appendChild(el("article",{class:"book-card","data-identity":r.identity},[cover,info]));
+      }
+    }catch(e){if(generation===shelfGeneration)libraryMessage("Library unavailable. Reading still works. "+genericErrorMessage(e.message));}
+  }
+  async function openSavedBook(id,ownedToken=null){
+    if(ownedToken!==null&&ownedToken!==loadEpoch)return;
+    flushSave();const token=ownedToken===null?++loadEpoch:ownedToken;++loadToken;
+    try{await ensureLibrary();const r=await queueLibrary(()=>library.open(id,()=>token===loadEpoch));if(token!==loadEpoch)return;
+      if(!r){libraryMessage("That book is no longer saved.");await renderShelf();await checkResume();return;}
+      openTextDoc(r.doc,r.identity,r.format,[],token,true,r.reimportStable,r.position,true);
+    }catch(e){if(token===loadEpoch)libraryMessage("Could not open saved book. "+genericErrorMessage(e.message));}
+  }
+  $("#libraryBtn").onclick=()=>{
+    flushSave();++loadEpoch;++loadToken;audio.pause();closeSheet();
+    $("#load").style.display="flex";$("#top").classList.remove("on");$("#reader").classList.remove("on");$("#bar").classList.remove("on");renderShelf();checkResume();
+  };
+  function saveSession(){
+    if(isDemo||!doc||mode==="text")return;
+    const hasAudio=!!pendingAudioFile,base={doc,mode:"audio",audioName:pendingAudioFile?pendingAudioFile.name:"",savedAt:Date.now()},full=pendingAudioFile?{...base,audioBlob:pendingAudioFile}:base;
+    return queueLibrary(async()=>{await ensureLibrary();try{await library.saveAudio(full);}catch(e){if(!hasAudio)throw e;await library.saveAudio(base);}}).catch(()=>toast("Opened, but resume was not saved"));
+  }
+  let resumeGeneration=0;
+  async function checkResume(){
+    const generation=++resumeGeneration,btn=$("#resumeBtn");btn.style.display="none";
+    try{await ensureLibrary();const chosen=await library.resume();if(generation!==resumeGeneration||!chosen)return;
+      const rec=chosen.record;$("#resumeName").textContent=rec.doc.title||"last session";btn.style.display="flex";
+      btn.onclick=async()=>{
+        flushSave();const token=++loadEpoch;++loadToken;
+        try{const fresh=await library.resume();if(token!==loadEpoch)return;if(!fresh){btn.style.display="none";libraryMessage("That saved session is no longer available.");return;}
+          if(fresh.kind==="text"){await openSavedBook(fresh.record.identity,token);return;}
+          const rec=fresh.record;mode="audio";sourceIdentity="";currentFormat="";positionReady=true;doc=rec.doc;
+          if(rec.audioBlob){isDemo=false;pendingAudioFile=rec.audioBlob;if(singleAudioObjUrl)URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=URL.createObjectURL(rec.audioBlob);audio.src=singleAudioObjUrl;open();}
+          else{haveSync=true;$("#syncCk").textContent="●";$("#syncName").textContent=doc.title;$("#audioName").textContent="re-select: "+(rec.audioName||"your audio file");btn.style.display="none";toast("Pick the audio file to finish resuming");}
+        }catch(e){if(token===loadEpoch)libraryMessage("Resume unavailable. "+genericErrorMessage(e.message));}
       };
-    }).catch(()=>{});
+    }catch(e){libraryMessage("Resume unavailable. "+genericErrorMessage(e.message));}
   }
 
   // ---------- display settings ----------
@@ -1020,7 +1182,7 @@
   document.addEventListener("visibilitychange",()=>{ if(mode!=="text"&&!document.hidden && !audio.paused) acquireWake(); });
 
   // ---------- flush the saved position when leaving (throttle would otherwise drop the last move) ----------
-  function flushSave(){ if(!doc) return; clearTimeout(scrollT);
+  function flushSave(){ if(!doc || !$("#reader").classList.contains("on")) return; clearTimeout(scrollT);
     if(!paged && (mode==="text"||audio.paused) && !(mode!=="text"&&lastUserInput<=pausedAt)){
       const i=segAtAnchor();if(i>=0&&i<segs.length){readingSeg=i;setPage(pageOf(i));}
     }
@@ -1267,7 +1429,7 @@
   function loadPlaylistPos(book){ try{ return JSON.parse(storageGet(plKey(book))||"null"); }catch(e){ return null; } }
 
   function startBook(files){
-    const epoch=++loadEpoch;++loadToken;
+    flushSave();const epoch=++loadEpoch;++loadToken;
     buildPlaylist(files).then(pl=>{
       if(epoch!==loadEpoch)return;
       if(!pl){ toast("No matching track + sync files in that selection."); return; }
@@ -1286,43 +1448,54 @@
   // ---------- loading ----------
   let haveAudio=false, haveSync=false;
   function maybeReady(){ if(haveAudio && haveSync) $("#startBtn").style.display="flex"; }
-  $("#audioIn").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return;
+  $("#audioIn").addEventListener("change",e=>{flushSave(); const f=e.target.files[0]; if(!f)return;
     mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++loadEpoch;++loadToken;
     pendingAudioFile=f; isDemo=false;if(singleAudioObjUrl)URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=URL.createObjectURL(f);audio.src=singleAudioObjUrl;haveAudio=true;
     $("#audioCk").textContent="●"; $("#audioName").textContent=f.name; maybeReady();
     if(haveSync && doc) open();   // text-only resume path: sync already loaded, just needed audio
   });
-  $("#syncIn").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return;
+  $("#syncIn").addEventListener("change",e=>{flushSave(); const f=e.target.files[0]; if(!f)return;
     const epoch=++loadEpoch;++loadToken;const fr=new FileReader(); fr.onload=()=>{if(epoch!==loadEpoch)return;try{doc=JSON.parse(fr.result);haveSync=true;
       $("#syncCk").textContent="●"; $("#syncName").textContent=f.name; maybeReady(); }
       catch(err){ alert("Could not read that JSON: "+err.message); } }; fr.readAsText(f); });
   $("#startBtn").onclick=open;
   $("#bookIn").addEventListener("change",e=>{ const files=e.target.files; if(files && files.length) startBook(files); });
-  $("#tryDemo").onclick=()=>{ if(!window.DEMO){ alert("Demo data missing."); return; }
+  $("#tryDemo").onclick=()=>{ flushSave();if(!window.DEMO){ alert("Demo data missing."); return; }
     mode="audio";sourceIdentity="";currentFormat="";positionReady=true;++loadEpoch;++loadToken;
     isDemo=true; doc=window.DEMO.align; audio.src=window.DEMO.audioDataUri; open(); };
 
   function clearMediaSession(){if(!("mediaSession" in navigator))return;for(const a of ["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"])try{navigator.mediaSession.setActionHandler(a,null);}catch(e){}try{navigator.mediaSession.setPositionState();}catch(e){}try{navigator.mediaSession.playbackState="none";}catch(e){}try{navigator.mediaSession.metadata=null;}catch(e){}}
   function teardownAudioForText(){++loadToken;pendingSeek=0;pendingAutoplay=false;sleepMode="off";sleepAt=0;sleepChapterEnd=Infinity;cancelAnimationFrame(rafId);rafId=null;audio.pause();releaseWake();clearMediaSession();if(curObjUrl){URL.revokeObjectURL(curObjUrl);curObjUrl=null;}if(singleAudioObjUrl){URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=null;}audio.removeAttribute("src");try{audio.load();}catch(e){}haveAudio=false;haveSync=false;$("#audioCk").textContent="○";$("#syncCk").textContent="○";$("#startBtn").style.display="none";}
-  function openTextDoc(nextDoc,identity,format,warnings,token,restored,identityStable=true){
+  function openTextDoc(nextDoc,identity,format,warnings,token,restored,identityStable=true,position=null,saved=false){
     const committed=commitGenericDoc(nextDoc,"generic "+format,token,()=>loadEpoch,()=>{
       mode="text";sourceIdentity=identity;sourceIdentityStable=identityStable;currentFormat=format;positionReady=false;
       playlist=null;dbxBook=null;isDemo=false;pendingAudioFile=null;teardownAudioForText();doc=nextDoc;
-      curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();showReaderUI();
-      let seg=0;try{const raw=storageGet(posKey());if(raw)seg=genericRestoreSeg(JSON.parse(raw).seg,segs.length);}catch(e){}
-      navigateTextSeg(seg,false,false);positionReady=true;lastSave=0;
+      curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();bookSavedStatus(saved);showReaderUI();
+      navigateTextSeg(genericRestoreSeg(position?.seg,segs.length),false,false);positionReady=true;lastSave=0;
+      bookSavedStatus(saved);
     });
-    if(!committed)return false;saveSession(token);
-    const ws=warnings||[];if(ws.length)toast("Opened with "+ws.length+" warning"+(ws.length===1?"":"s"));else if(!restored)toast("Opened text-only book");return true;
+    if(!committed)return false;
+    if(!saved)toast("Opened for this session; not saved on this device");
+    else if(warnings?.length)toast("Opened with "+warnings.length+" warning(s)");
+    return true;
   }
-  $("#genericIn").addEventListener("change",async e=>{const f=e.target.files[0];if(!f)return;const token=++loadEpoch;++loadToken;const small=$("#genericBtn small"),original=small.textContent,current=()=>{if(token!==loadEpoch)giFail("STALE_IMPORT","import superseded");};small.textContent="Opening locally…";
-    try{if(f.size>GI_LIMIT.file)giFail("LIMIT","selected file is too large");current();const bytes=await f.arrayBuffer();current();const result=await genericDocFromBytes(bytes,f.name,current);current();const identity=await genericIdentityResult(bytes,result.format);current();if(!identity.stable)result.warnings.push("stable content identity unavailable; resume is session-only");openTextDoc(result.doc,identity.identity,result.format,result.warnings,token,false,identity.stable);}
-    catch(err){if(token===loadEpoch){const stage=(err&&err.code)||"IMPORT";alert("This file can't be opened ("+stage+"):\n\n"+genericErrorMessage((err&&err.message)||err));}}
-    finally{if(token===loadEpoch){small.textContent=original;e.target.value="";}}
+  $("#genericIn").addEventListener("change",async e=>{
+    const f=e.target.files[0];if(!f)return;flushSave();const token=++loadEpoch;++loadToken;
+    const small=$("#genericBtn small"),current=()=>{if(token!==loadEpoch)giFail("STALE_IMPORT","import superseded");};small.textContent="Opening locally…";
+    try{
+      if(f.size>GI_LIMIT.file)giFail("LIMIT","selected file is too large");current();const bytes=await f.arrayBuffer();current();
+      const result=await genericDocFromBytes(bytes,f.name,current);current();const identity=await genericIdentityResult(bytes,result.format);current();
+      const invalid=validateDoc(result.doc,"import");if(invalid)giFail("CONTRACT",invalid);
+      let record=null;
+      try{await ensureLibrary();current();const now=Date.now();record=await queueLibrary(()=>library.admit({version:1,identity:identity.identity,format:result.format,reimportStable:identity.stable,doc:result.doc,cover:result.cover,importedAt:now,lastReadAt:now,position:{seg:0}},()=>token===loadEpoch));}
+      catch(err){current();libraryMessage("Import not saved. Existing books were kept. "+genericErrorMessage(err.message));}
+      current();openTextDoc(result.doc,identity.identity,result.format,result.warnings,token,false,identity.stable,record?.position||{seg:legacyPosition(identity.identity)},!!record);
+    }catch(err){if(token===loadEpoch)alert("This file can't be opened ("+((err&&err.code)||"IMPORT")+"):\n\n"+genericErrorMessage(err?.message||err));}
+    finally{if(token===loadEpoch){small.textContent=".txt, .md, .markdown, or EPUB 3";e.target.value="";}}
   });
 
   applyComfortCss();
-  function showReaderUI(){ comfortSessionAnchor=null;
+  function showReaderUI(){ comfortSessionAnchor=null;releaseShelf();if(mode!=="text")$("#bookStatus").textContent="";
     applyComfortCss();
     applyFont(fontPx()); if(mode!=="text"){applyRate();setupMediaSession();}
     $("#load").style.display="none";
@@ -1505,7 +1678,7 @@
     } else if(p.get("error")){ history.replaceState(null,"",location.pathname); }
   })();
 
-  checkResume();   // offer resume on first paint
+  renderShelf();checkResume();   // offer durable resume on first paint
 })();
 </script>
 </body>
