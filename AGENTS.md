@@ -232,8 +232,9 @@ it. If you raise a limit, change it in one place — `MAX_VOICE_SECONDS` /
 
 ## Verify before claiming green
 
-There is no GitHub-Actions CI (the repo token has no `workflow` scope and we keep the
-repo dependency-free), so **`./check.sh` is the gate** — it runs every check below in
+There is no GitHub-Actions CI (we keep the repo dependency-free; the one workflow,
+`.github/workflows/claude.yml`, is a comment-triggered `@claude` request channel that
+never runs on push or pull_request), so **`./check.sh` is the gate** — it runs every check below in
 one command, no network or device needed. Run it before opening a PR. What it covers:
 
 - `python3 tools/check_ip_limits.py` — the IP-limits guard passes (also runs as the
@@ -260,6 +261,9 @@ one command, no network or device needed. Run it before opening a PR. What it co
 - `python3 tests/test_merge_train.py` — the dependency-free draft/train policy verifier's
   exact topology, live identity, inventory-digest, hidden-index/config, scrubbed-landing,
   dirty-tree, tamper, replacement-object, and strict-JSON refusal checks.
+- `python3 tests/test_claude_workflow.py` — the `@claude` workflow's safety boundaries:
+  actions pinned to commit SHAs, every trigger gated on a trusted author, fork PRs
+  refused before checkout, and no write scope on the workflow token except OIDC.
 - `python3 tools/run_local_gate.py` — run the full local gate through the selected Python/Git Bash
   while routing bytecode caches outside the worktree; use this form for train evidence.
 
