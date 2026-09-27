@@ -327,9 +327,6 @@
     if(token!==currentToken())return false;const bad=validateDoc(nextDoc,source);if(bad)giFail("CONTRACT",bad);
     if(token!==currentToken())return false;commit();return true;
   }
-  function queueGenericWrite(queue,isCurrent,write,onError){return Promise.resolve(queue).catch(()=>{}).then(async()=>{
-    if(!isCurrent())return false;try{await write();return true;}catch(e){if(isCurrent())onError(e);return false;}
-  });}
   function asBytes(input){ return input instanceof Uint8Array?input:new Uint8Array(input); }
   function decodeGenericText(input){ const b=asBytes(input); let enc="utf-8",off=0;
     if(b[0]===0xef&&b[1]===0xbb&&b[2]===0xbf) off=3;
@@ -991,7 +988,7 @@
           else{haveSync=true;$("#syncCk").textContent="●";$("#syncName").textContent=doc.title;$("#audioName").textContent="re-select: "+(rec.audioName||"your audio file");btn.style.display="none";toast("Pick the audio file to finish resuming");}
         }catch(e){if(token===loadEpoch)libraryMessage("Resume unavailable. "+genericErrorMessage(e.message));}
       };
-    }catch(e){libraryMessage("Resume unavailable. "+genericErrorMessage(e.message));}
+    }catch(e){if(generation===resumeGeneration)libraryMessage("Resume unavailable. "+genericErrorMessage(e.message));}
   }
 
   // ---------- display settings ----------
