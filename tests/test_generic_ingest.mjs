@@ -12,7 +12,7 @@ const html=readFileSync(join(root,"index.html"),"utf8");
 const a=html.indexOf("// GENERIC_INGEST_BEGIN"),b=html.indexOf("// GENERIC_INGEST_END");
 assert.ok(a>=0&&b>a,"shipped generic-ingest block missing");
 const modPath=join(tmpdir(),`generic_ingest_${process.pid}.mjs`);
-const names=["validateDoc","GI_LIMIT","genericErrorMessage","decodeGenericText","decodeXmlBytes","txtBook","markdownInline","markdownBook","projectGeneric","crc32","parseZip","readZipEntry","checkXmlDoctype","resolveHref","selectOpfPath","assembleOpfModel","assembleEpubBook","genericDocFromBytes","genericIdentityResult","genericIdentity","genericPositionKey","genericRestoreSeg","commitGenericDoc","queueGenericWrite"];
+const names=["validateDoc","GI_LIMIT","genericErrorMessage","decodeGenericText","decodeXmlBytes","txtBook","markdownInline","markdownBook","projectGeneric","crc32","parseZip","readZipEntry","checkXmlDoctype","resolveHref","selectOpfPath","assembleOpfModel","assembleEpubBook","genericDocFromBytes","genericIdentityResult","genericIdentity","genericPositionKey","genericRestoreSeg","commitGenericDoc"];
 writeFileSync(modPath,html.slice(a,b)+`\nexport {${names.join(",")}};\n`);
 after(()=>{try{rmSync(modPath);}catch{}});
 const gi=await import(pathToFileURL(modPath).href);
@@ -145,7 +145,7 @@ test("href and lexical DOCTYPE boundaries are exact",()=>{
   assert.throws(()=>gi.checkXmlDoctype("<!DOCTYPE html><!DOCTYPE html><html/>",true),e=>e.code==="XML_DOCTYPE");
 });
 
-test("validation, stale commit, restore clamp, and serialized writes are transactional",async()=>{
+test("validation, stale commit, and restore clamp are transactional",async()=>{
   const doc={title:"Synthetic",audio:"",chapters:[],segments:[{id:0,start:0,end:1,text:"one"},{id:1,start:1,end:2,text:"two"}]};
   assert.equal(gi.validateDoc(doc,"fixture"),null);
   assert.match(gi.validateDoc({...doc,segments:[]},"fixture"),/^fixture: /);
@@ -158,23 +158,6 @@ test("validation, stale commit, restore clamp, and serialized writes are transac
   assert.equal(commits,0);
   assert.equal(gi.commitGenericDoc(doc,"fixture",2,()=>token,()=>{commits++;}),true);
   assert.equal(commits,1);
-
-  let stored="prior",releaseOld,warnings=0;
-  const old=gi.queueGenericWrite(Promise.resolve(),()=>true,()=>new Promise(resolve=>{releaseOld=()=>{stored="old";resolve();};}),()=>{warnings++;});
-  while(!releaseOld)await new Promise(resolve=>setTimeout(resolve,0));
-  const newer=gi.queueGenericWrite(old,()=>true,async()=>{stored="new";},()=>{warnings++;});
-  releaseOld();assert.equal(await newer,true);assert.equal(stored,"new");assert.equal(warnings,0);
-
-  let releaseGate,wroteStale=false,current=true;
-  const gate=new Promise(resolve=>{releaseGate=resolve;});
-  const stale=gi.queueGenericWrite(gate,()=>current,async()=>{wroteStale=true;},()=>{warnings++;});
-  current=false;releaseGate();assert.equal(await stale,false);assert.equal(wroteStale,false);
-  const failed=await gi.queueGenericWrite(Promise.resolve(),()=>true,async()=>{throw new Error("quota");},()=>{warnings++;});
-  assert.equal(failed,false);assert.equal(stored,"new");assert.equal(warnings,1);
-  let releaseFailure,stillCurrent=true,staleWarnings=0;
-  const staleFailure=gi.queueGenericWrite(Promise.resolve(),()=>stillCurrent,()=>new Promise((resolve,reject)=>{releaseFailure=()=>reject(new Error("old quota"));}),()=>{staleWarnings++;});
-  while(!releaseFailure)await new Promise(resolve=>setTimeout(resolve,0));stillCurrent=false;releaseFailure();
-  assert.equal(await staleFailure,false);assert.equal(staleWarnings,0);
 });
 
 const archivePaths=new Set(["OPS/package.opf","OPS/nav.xhtml","OPS/c1.xhtml","OPS/c2.xhtml","OPS/skip.xhtml"]);
@@ -353,3 +336,5 @@ test("stable identity and position keys isolate same-title generic books",async(
   const fallback=await gi.genericIdentityResult(te.encode("one"),"txt",null);
   assert.equal(fallback.stable,false);assert.match(fallback.identity,/^ephemeral:[0-9a-f]{32}$/);
 });
+
+await import('./test_library.mjs');
