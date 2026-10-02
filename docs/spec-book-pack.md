@@ -11,8 +11,9 @@ scripts. The chain forks three ways depending on the audiobook's *format tier*, 
 comes from one of two sources, and three of the steps (`probe_track_starts.py`,
 `probe_m4b.py`, `find_chapter_boundaries.py`) emit a transcript a human must read and turn
 into a hand-built map JSON. The stable half of the chain is committed in
-`pipeline/`; the hardest tier (straddling tracks) only exists as Book-17-specific scratch
-(`_inn_work/book17_*.py`). Codex's review asked for a **book-pack workflow**: a manifest
+`pipeline/`; the straddling-track make-units, cut, and package steps now exist as
+`mp3_make_units.py`, `mp3_cut.py`, and `mp3_package.py`. The driver and long-unit
+split/recombine orchestration remain proposals. Codex's review asked for a **book-pack workflow**: a manifest
 generator, m4b chapter import, EPUB/plain-text import, and **one command that produces
 per-track sync files**.
 
@@ -41,7 +42,7 @@ to chapters:
 |---|---|---|---|---|---|
 | **1 — m4b marks** | one `.m4b`, embedded chapter marks (marks map ~1:1 or one web chapter split across 2–3 marks) | `probe_m4b.py` ASRs each mark → you read off the RAW mark index each web chapter STARTS at; `m4b_make_units.py --starts … --end …` | `m4b_cut.py --ext wav` then `--ext m4a` | `m4b_package.py` (1 unit = 1 track; no recombine/split) | 4, 7, 13, 14, 15 |
 | **2 — mp3 multitrack, boundaries on chapters** | many `NN - *.mp3`, tracks ≥ chapters, every track boundary falls on a chapter boundary | `probe_track_starts.py` ASRs each track opening → hand-build `*_track_map.json` (chapter→tracks[]+seg) | (none — align tracks in place) | `align_chapters.py --auto-wps` → `recombine_chapters.py` → `split_tracks.py` | 8, 10, 11, 12 |
-| **3 — straddling (hard)** | few-track / single-file mp3, tracks **<<** chapters, tracks straddle chapter boundaries | `find_chapter_boundaries.py` (ASR-anchor each track→seg, then refine each chapter's start in the continuous timeline) → `*_boundaries.json` | `book17_cut.py` (ffmpeg `concat` across track edges) | align per cut chapter → `book17_package.py` | 3, 6, 9, 16, 17 |
+| **3 — straddling (hard)** | few-track / single-file mp3, tracks **<<** chapters, tracks straddle chapter boundaries | `find_chapter_boundaries.py` (ASR-anchor each track→seg, then refine each chapter's start in the continuous timeline) → `*_boundaries.json` | `mp3_cut.py` (ffmpeg `concat` across track edges) | align per cut chapter → `mp3_package.py` | 3, 6, 9, 16, 17 |
 
 Key structural facts the driver relies on:
 
@@ -56,7 +57,7 @@ Key structural facts the driver relies on:
   chapter narrated faster/slower than the guess.
 - **Two cut artifacts from the same boundaries**: a 16 kHz mono **wav/PCM** for the aligner
   and ASR-verify (libsndfile can't read AAC), and a lossless/stream-copy **m4a/mp3** for
-  phone playback. `m4b_cut.py --ext {wav,m4a}` and `book17_cut.py --align-out/--play-out`
+  phone playback. `m4b_cut.py --ext {wav,m4a}` and `mp3_cut.py --align-out/--play-out`
   already produce both.
 - **One contract.** Every producer and consumer validates through
   `pipeline/schema.py::validate_doc` (segments[], optional words[], optional chapters[]).
@@ -91,8 +92,9 @@ non-interactive. Proposed schema (validated by a new `pipeline/book_manifest.py`
     "boundaries": "book17_boundaries.json",             // tier 3 (find_chapter_boundaries out)
     "merge_units": [[0,1]],                             // tier 3: web-chapter indices to merge
     "split_units": [{"unit": 0, "at_seg": 5132}],       // tier 3: long unit to split+recombine
-    "confirmed": true                                    // gate passed → run is non-interactive
+    "confirmed": true                                    // Gate A only; see Gate B below
   },
+  "boundary_review": { "approved": false },     // Gate B; driver stores reviewed values (§5)
   "ship": {
     "dropbox_dir": "D:/Dropbox/Apps/InnReader/book14"   // final per-track + manifest target
   },
@@ -106,8 +108,8 @@ Rationale for fields:
 
 - `tier: "auto"` → the driver detects (see §4) and rewrites the field in place so the
   decision is recorded.
-- The `map` block is the only part a human edits mid-run; `confirmed: true` is the latch
-  that makes the *next* `process_book.py` invocation run straight through (resumable).
+- `map.confirmed` records Gate A, not Gate B. `boundary_review` separately records
+  approval of the effective boundary/split plan and verification result (§5).
 - `thermal` mirrors the real `align_chapters.py` / `align_book.py` flags; defaults match
   the post-cooling-fix lighter cadence noted in `CLAUDE.md` (`--cooldown-every 1800
   --cooldown 30`). `smartctl_dev` default `/dev/sda` reflects the **post-swap** mapping
@@ -149,20 +151,37 @@ prints the probe output and **halts** with: "edit `book.json` `map.*` and set
   flags `LOW CONFIDENCE` rows and a non-monotonic-starts warning — those are exactly what
   the human checks), plus any `merge_units` / `split_units`.
 
-**Gate B — confirm boundary timings (tier 3 only, optional elsewhere).** After cut + a
-first align, the driver runs `verify_tracks.py` and, if it FLAGs points or `split_units`
-is requested, halts for the human to adjust a boundary or request a unit split before the
-final package. (Tiers 1–2 usually pass straight through; `verify_tracks.py` is still the
-ship gate, just not an interactive stop unless it fails.)
+**Gate B — confirm boundary timings.** After cut + a first align, any flagged verification
+point or requested `split_units` requires review before shipping, in any tier. An exit-0
+`verify_tracks.py` run can still contain FLAGs: its default `--max-fail-frac 0.4` rejects
+only a failure fraction strictly greater than 40%. The driver must capture the ordinary
+verification log and read the final `N/M points PASS, K FLAG` summary; require M > 0,
+consistent counts, and collect the per-point FLAG rows. A missing/malformed summary or
+nonzero exit blocks shipping; neither can be waived by Gate B. K > 0 at exit 0 still
+halts for Gate B, even if the log also says `GATE PASS`.
 
-Both gates are **state in the manifest**, not interactive prompts — so a resumed run is
-fully non-interactive and a CI/cron-style re-run behaves deterministically (belt-and-
+Minimal durable state is `boundary_review.approved` plus a plain JSON copy of the
+reviewed effective map/boundary values (including referenced map/boundary file contents),
+`merge_units`, `split_units`, verification options, and the summary/flag rows in
+`boundary_review.reviewed`. These are ordinary inspectable values, not hashes or a new
+custody system. Set approval only after the human accepts that result or repairs it and
+reviews the resulting verification. An unchanged approved run may resume without another
+prompt. Compare the current values with the recorded values before reuse; any boundary,
+map, merge/split, verification-option, or verification-result change clears approval and
+requires review of the new result. Replacing source audio/text or regenerating alignment
+also clears approval and requires fresh verification; an old log is not evidence for new
+outputs. Changing the map clears `map.confirmed` as well. Applying a requested split is
+a plan change: rebuild affected cuts/alignment/package and verify before approving the
+result. Existing schema-valid output alone does not authorize reuse after such changes.
+
+Both gates are **state in the manifest**, not interactive prompts — so an unchanged,
+approved resumed run is non-interactive and a CI/cron-style re-run behaves deterministically (belt-and-
 suspenders: divisible + resumable, per `CLAUDE.md`).
 
 ## 6. End-to-end stages (what `process_book.py` actually calls)
 
 Each stage is idempotent and skip-if-done (mirroring the resume logic already in
-`align_chapters.py`, `m4b_cut.py`, `book17_cut.py`). `--from-stage` / `--only` let you
+`align_chapters.py`, `m4b_cut.py`, `mp3_cut.py`). `--from-stage` / `--only` let you
 re-enter at any stage. The driver shells out to the existing scripts with `sys.executable`
 (so children inherit the ROCm 3.12 interpreter — **launch the driver with `py -3.12`**;
 the bare-`py` shebang trap lands children on Store-3.13 CPU torch — `CLAUDE.md`).
@@ -183,11 +202,11 @@ the bare-`py` shebang trap lands children on Store-3.13 CPU torch — `CLAUDE.md
 3. **make units** —
    - tier 1: `m4b_make_units.py --starts --end` → `*_units.json` + `*_track_map.json`.
    - tier 2: the confirmed `*_track_map.json` is the unit definition (no cut).
-   - tier 3: a promoted `make_units` step (generalize `book17_make_units.py`) applies
+   - tier 3: existing `mp3_make_units.py --merge` applies
      `merge_units` → `*_units.json` + `*_track_map.json` + `*_cut_bounds.json`.
 4. **cut** (tiers 1 & 3 only) —
    - tier 1: `m4b_cut.py --ext wav` (aligner input).
-   - tier 3: `book17_cut.py` → `align-out/NN.wav` + `play-out/NN.mp3` (ffmpeg `concat`
+   - tier 3: `mp3_cut.py` → `align-out/NN.wav` + `play-out/NN.mp3` (ffmpeg `concat`
      across track edges).
 5. **align** — `align_chapters.py --auto-wps --track-map … --text … --outdir per_chapter`,
    passing the `thermal` knobs through to per-chapter `align_book.py` subprocesses
@@ -195,21 +214,19 @@ the bare-`py` shebang trap lands children on Store-3.13 CPU torch — `CLAUDE.md
 6. **assemble** —
    - tier 1: `m4b_cut.py --ext m4a` (playback files) then `m4b_package.py`.
    - tier 2: `recombine_chapters.py` → `split_tracks.py`.
-   - tier 3: `book17_package.py` (a unit may hold >1 web-chapter marker — multi-part
+   - tier 3: `mp3_package.py` (a unit may hold >1 web-chapter marker — multi-part
      interludes — placed at aligned segment times). If `split_units` is set, run the
      promoted split→align→recombine sub-flow (generalize `book17_split_strat.py` +
      `book17_recombine_strat.py`) before packaging.
    - All paths emit `alignNN.json` + `manifest.json`, every file through
      `schema.validate_doc`.
 7. **verify** — `verify_tracks.py --dir … --audio-glob …` (ASR-vs-alignment word overlap;
-   exits nonzero past `--max-fail-frac`). This is the **ship gate**. **Gate B** here for
-   tier 3 / on FLAG.
+   exits nonzero past `--max-fail-frac`). This is the **ship gate**. **Gate B** applies
+   on FLAG or a requested split, as specified in §5; exit status alone is insufficient.
 8. **ship** — copy the per-track `alignNN.json` + `manifest.json` and the playback audio
-   (`NN.m4a` / `NN.mp3`) to `ship.dropbox_dir`. **Driver-side IP assertion before copy**
-   (§9): refuse to copy any per-track JSON whose prose-word count or any embedded audio
-   would violate the repo limits *if it were ever tracked* — the Dropbox app folder is the
-   ship target, but the assertion keeps the habit honest and catches a mis-pathed write
-   into the repo tree.
+   (`NN.m4a` / `NN.mp3`) to `ship.dropbox_dir` only for owner-authorized personal use at
+   a separately authorized destination outside the repository (§9). A configured path
+   alone is not upload/copy authorization. This proposal authorizes no actual transfer.
 
 A `process_book.py --plan` prints the resolved stage list (like `align_chapters.py
 --dry-run`) without touching the GPU.
@@ -237,15 +254,15 @@ all four sources (live/wayback/epub/plain) go through one writer.
 
 ## 8. Promotion plan: scratch → `pipeline/`
 
-Promote the battle-tested Book-17 hard-tier tools, generalized to be book-agnostic
-(parameterized by the manifest, no `book17`-hardcoded filenames):
+Reuse the existing generic hard-tier tools; do not rename them or combine working
+packagers just to implement the driver. Remaining scratch promotions are proposals:
 
 | Scratch tool | Promote to | Changes for promotion |
 |---|---|---|
-| `find_chapter_boundaries.py` | `pipeline/find_chapter_boundaries.py` | already generic (takes `--audio-glob/--text/--chapters/--out`); move as-is, import `schema`/helpers from repo. |
-| `book17_make_units.py` | `pipeline/make_units.py` | replace the hardcoded `groups = [[0,1]] + …` with manifest `merge_units`; read `*_boundaries.json` + `*.chapters.json` by flag. |
-| `book17_cut.py` | `pipeline/concat_cut.py` | drop `book17` names; keep ffmpeg-`concat` cross-track logic + the stale-output (mtime) resume guard. |
-| `book17_package.py` | `pipeline/package_tracks.py` | generalize the "unit may hold >1 web-chapter marker" logic; this also subsumes `m4b_package.py`'s 1-unit-1-marker case as a special case (consider merging the two packagers). |
+| `find_chapter_boundaries.py` | existing `pipeline/find_chapter_boundaries.py` | already generic (takes `--audio-glob/--text/--chapters/--out`); reuse in place. |
+| historical `book17_make_units.py` | existing `pipeline/mp3_make_units.py` | already accepts boundaries/chapters and consecutive `--merge` ranges; emits units, track map, cut bounds. |
+| historical `book17_cut.py` | existing `pipeline/mp3_cut.py` | already accepts generic paths and cuts across track edges; reuse its input-mtime resume guard. |
+| historical `book17_package.py` | existing `pipeline/mp3_package.py` | already places multiple chapter markers inside one unit and emits `NN.mp3` hints; keep the separate m4b packager. |
 | `book17_split_strat.py` / `book17_recombine_strat.py` | `pipeline/split_unit.py` / `pipeline/recombine_unit.py` | parameterize the Pt1/Pt2 boundary (`split_units[].at_seg`) and the audio file; keep the offset-by-Pt1-duration recombine. |
 | `wayback_resolve.py`, `wb_cache.py`, `wb_parse.py` | `pipeline/wayback_*.py` | already import repo `fetch_text`; move so the live/wayback split lives in one place. |
 
@@ -255,8 +272,8 @@ fallback aligners; the driver uses the `align_book.py`→`align_chapters.py` anc
 `AGENTS.md` "each script usable standalone" requirement and the restraint principle (don't
 hide a working tool behind only the driver).
 
-After promotion the three tiers share one packager and one cut/align/verify spine; the only
-tier-specific code is detect + probe + make-units.
+The driver reuses the tier-specific CLIs and common align/verify stages; a shared
+packager is not required.
 
 ## 9. Staying inside the IP guard (`tools/check_ip_limits.py`)
 
@@ -273,11 +290,15 @@ The book-pack workflow respects this by construction:
 - **Caches outside Dropbox.** Per `CLAUDE.md`, Dropbox sync-lock corrupts atomic cache
   flushes; `wb_cache.py` and any align checkpoints write to a LOCAL non-Dropbox dir, and
   durable checkpoints go to the COOL drive (C:/P5 post-swap).
-- **Driver-side ship assertion (§6 step 8).** Before copying, the driver runs the same
-  measurement logic `check_ip_limits.py` uses (reuse `prose_words` / `measure_seconds`) as
-  a guard: it asserts the destination is the configured Dropbox app folder (not a repo
-  path) and that no artifact would violate limits if tracked. Belt-and-suspenders with the
-  pre-commit hook, which still guards the repo itself.
+- **Private delivery versus tracked samples (§6 step 8).** Full-length owner-authorized
+  personal book artifacts may exceed the repository's sample caps when kept outside Git
+  at a separately authorized private destination. Before copying, resolve the destination
+  and refuse any path inside the repository (including a link resolving into it); require
+  the separately authorized destination. Do not apply the 500-word/20-second sample caps
+  to private full-book outputs merely because they could hypothetically be tracked.
+  `check_ip_limits.py` iterates Git-tracked files: those files, including embedded audio,
+  remain subject to the unchanged caps and forbidden bulk-file rules. No limit is raised,
+  tracked bulk output allowed, or transfer authorized by this specification.
 - **Demo unchanged.** The repo's only shipped sample stays the existing Book-1 demo
   (≤ 9 s / within both limits); the book-pack workflow never adds tracked samples.
 
@@ -290,10 +311,8 @@ Open questions (ranked):
    check; how many tracks must be sampled, and at what overlap threshold, before we trust
    the route vs stop for the human? Mis-routing wastes a multi-hour GPU run. (Leaning:
    sample 3 spread tracks; any opening NOT landing on a chapter start → tier 3.)
-2. **One packager or two?** `book17_package.py` (multi-marker units) is a strict superset
-   of `m4b_package.py` (1 marker/unit). Merge into `package_tracks.py`, or keep two for
-   clarity? Merging reduces the tier-specific surface to detect+probe+make-units (§8 goal),
-   but the m4b path's `audio = NN.m4a` vs mp3 `audio = NN.mp3` hint differs.
+2. **Packagers.** Keep existing `mp3_package.py` and `m4b_package.py`; their playback
+   hints differ (`NN.mp3` versus `NN.m4a`). No unification is required for this proposal.
 3. **Where does `split_units` get decided?** Tier-3's "a long merged unit drifts under one
    auto-wps" (the Strategists 7.86 h case) was only discovered *after* a first align flagged
    in `verify_tracks.py`. Should `process_book.py` auto-propose a split when a unit exceeds
@@ -306,9 +325,9 @@ Edge cases the spec must handle:
   --starts` lists only the FIRST mark of each web chapter; the unit spans to the next
   chapter's first mark.
 - **Cross-track cuts (tier 3).** A chapter span crossing mp3 boundaries: handled by
-  `book17_cut.py`'s ffmpeg `concat` list (inpoint/outpoint per track portion).
+  `mp3_cut.py`'s ffmpeg `concat` list (inpoint/outpoint per track portion).
 - **Multi-part interludes (e.g. Strategists Pt1/Pt2).** Two web-chapter markers inside one
-  audio unit: `book17_package.py` already places each marker at its aligned segment time
+  audio unit: `mp3_package.py` already places each marker at its aligned segment time
   inside the unit. If continuous narration drifts under a single auto-wps over a very long
   unit, fall back to `split_unit` → align each part → `recombine_unit` (offset Pt2 by Pt1
   audio duration).
@@ -334,3 +353,14 @@ Edge cases the spec must handle:
 - `import_epub.py` on a sample EPUB and `import_plain.py` on a pasted chapter each produce a
   `.txt`/`.chapters.json` pair whose `seg` indices match what `fetch_text.py` would assign.
 - `./check.sh` stays green; no per-book data file is tracked; `check_ip_limits.py` passes.
+- A synthetic full-size personal output (>500 prose words or >20 seconds audio) is
+  eligible for separately authorized delivery outside Git; a destination inside the
+  repository is refused. An oversized tracked sample still fails the unchanged IP guard.
+- An exit-0 verifier result with one FLAG out of five points requires Gate B; a malformed
+  summary, zero sampled points, or nonzero exit blocks shipping even with old approval.
+- An approved unchanged boundary/split plan and verification result resume without a
+  prompt. Changing a referenced boundary value or split plan invalidates approval,
+  rebuilds affected output, and requires fresh verification/reapproval before shipping.
+
+These are acceptance requirements for the proposed driver, not claims that it exists
+or that a live book has been processed, copied, or accepted on a device.
