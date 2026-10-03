@@ -52,7 +52,7 @@ def main():
         for s in tsegs:
             words = [{"w": w["w"],
                       "s": round(min(max(w["s"] - t0, 0.0), dur), 3),
-                      "e": round(min(max(w["e"] - t0, 0.0), dur), 3)} for w in s["words"]]
+                      "e": round(min(max(w["e"] - t0, 0.0), dur), 3)} for w in s.get("words", [])]
             local.append({"id": s["id"] - gid0,
                           "start": round(min(max(s["start"] - t0, 0.0), dur), 3),
                           "end": round(min(max(s["end"] - t0, 0.0), dur), 3),
