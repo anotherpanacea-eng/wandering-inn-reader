@@ -22,11 +22,12 @@ class SplitTracksTest(unittest.TestCase):
         # schema validation and manifest assembly with two synthetic 2-second tracks.
         segments = [
             {"id": 0, "start": 0.25, "end": 1.5, "text": "Synthetic sentence only."},
-            {"id": 1, "start": 2.25, "end": 3.5, "text": "Synthetic timed sentence.",
+            {"id": 1, "start": 1.5, "end": 2.0, "text": "Synthetic null timings.", "words": None},
+            {"id": 2, "start": 2.25, "end": 3.5, "text": "Synthetic timed sentence.",
              "words": [{"w": "Synthetic", "s": 2.25, "e": 2.75}]},
         ]
         doc = {"title": "Synthetic", "audio": "", "segments": segments,
-               "chapters": [{"title": "Second", "start": 2.25, "seg": 1}]}
+               "chapters": [{"title": "Second", "start": 2.25, "seg": 2}]}
         validate_doc(doc)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -43,13 +44,13 @@ class SplitTracksTest(unittest.TestCase):
             tracks = [json.loads((out / f"align{n:02d}.json").read_text()) for n in (1, 2)]
             for track in tracks:
                 validate_doc(track)
-            self.assertEqual(tracks[0]["segments"], [dict(segments[0], words=[])])
+            self.assertEqual(tracks[0]["segments"], [dict(segments[0], words=[]), dict(segments[1], words=[])])
             self.assertEqual(tracks[1]["segments"], [
                 {"id": 0, "start": 0.25, "end": 1.5, "text": "Synthetic timed sentence.",
                  "words": [{"w": "Synthetic", "s": 0.25, "e": 0.75}]}])
             self.assertEqual(tracks[1]["chapters"], [{"title": "Second", "start": 0.25, "seg": 0}])
             manifest = json.loads((out / "manifest.json").read_text())
-            self.assertEqual([t["sentences"] for t in manifest["tracks"]], [1, 1])
+            self.assertEqual([t["sentences"] for t in manifest["tracks"]], [2, 1])
             self.assertEqual([t["audio"] for t in manifest["tracks"]], ["01.wav", "02.wav"])
 
 
