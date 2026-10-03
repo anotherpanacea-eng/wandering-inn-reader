@@ -31,6 +31,8 @@ echo "→ byte-compile pipeline + tools + tests"
 
 echo "→ align.py data-contract test"
 "$PYTHON" tests/test_align.py
+echo "→ plan-only book manifest and no-execution boundary test"
+"$PYTHON" tests/test_book_plan.py
 
 echo "→ edit-aware aligner cut-detection / gap-emit test (synthetic, no GPU)"
 "$PYTHON" tests/test_editaware.py
