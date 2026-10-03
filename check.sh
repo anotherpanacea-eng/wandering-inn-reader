@@ -29,6 +29,9 @@ echo "→ safe-pattern lint (no HTML-string DOM / parenthesised eval-mode call)"
 echo "→ byte-compile pipeline + tools + tests"
 "$PYTHON" -m py_compile pipeline/*.py tools/*.py tests/*.py
 
+echo "→ schema numeric timing-boundary test"
+"$PYTHON" tests/test_schema_numeric.py
+
 echo "→ align.py data-contract test"
 "$PYTHON" tests/test_align.py
 
