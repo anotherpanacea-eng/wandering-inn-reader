@@ -8,7 +8,7 @@ No aeneas/torch needed — to_segments/attach_words/attach_chapters are pure Pyt
 only GENERATING a sync map needs a real aligner. Plain stdlib asserts (the repo has
 no pytest); run directly: `python3 tests/test_align.py`. Exit 0 = pass.
 """
-import contextlib, io, os, sys
+import contextlib, io, os, sys, json, subprocess, tempfile
 
 try:                                  # cp1252 Windows console can't encode the check glyph
     sys.stdout.reconfigure(encoding="utf-8")
@@ -36,6 +36,36 @@ def test_to_segments_skips_unusable():
     assert [s["text"] for s in segs] == ["First sentence.", "Second one.", "Third here."]
     assert segs[0]["start"] == 0.0 and segs[2]["end"] == 6.5
     return segs
+
+
+def test_fragment_list_cli_matches_envelope():
+    """Accepted bare lists and object sync maps produce identical player output."""
+    fragments = [
+        {"lines": ["Synthetic first sentence."], "begin": "0.0004", "end": "2.0"},
+        {"lines": [" "], "begin": "2", "end": "3"},
+        {"text": "Synthetic second sentence.", "begin": "2", "end": "4.25"},
+        {"text": "No timestamps."},
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        outputs = []
+        for name, payload in (("list", fragments), ("envelope", {"fragments": fragments})):
+            source = os.path.join(tmp, name + ".json")
+            dest = os.path.join(tmp, name + "-output.json")
+            with open(source, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            result = subprocess.run(
+                [sys.executable, os.path.join(HERE, "..", "pipeline", "align.py"),
+                 "--sync", source, "--title", "Synthetic", "--audio", "sample.mp3", "--out", dest],
+                capture_output=True, text=True)
+            assert result.returncode == 0, result.stderr
+            with open(dest, encoding="utf-8") as f:
+                outputs.append(json.load(f))
+        assert outputs[0] == outputs[1], outputs
+        validate_doc(outputs[0])
+        assert [s["text"] for s in outputs[0]["segments"]] == [
+            "Synthetic first sentence.", "Synthetic second sentence."]
+        assert outputs[0]["segments"][0]["start"] == 0.0
+        assert outputs[0]["segments"][1]["end"] == 4.25
 
 
 def test_attach_words_packs_by_time(segs):
@@ -84,6 +114,7 @@ def test_validate_doc_contract(segs):
 
 
 def main():
+    test_fragment_list_cli_matches_envelope()
     segs = test_to_segments_skips_unusable()
     test_attach_words_packs_by_time(segs)
     test_attach_chapters_maps_and_drops(segs)
