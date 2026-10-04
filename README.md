@@ -4,6 +4,8 @@ Listen to the Parsneau narration and read the same words in sync, on your phone.
 Built for following along with *The Wandering Inn*, but it works for any
 audiobook you have the text for.
 
+Use **Search** to find a literal phrase in the open book, then choose a result to reveal it in scroll or paged mode. Audio search leaves playback paused. Queries stay transient; see [local search](docs/search-phase3.md) for matching and result limits. Search is Phase3A; notes and other wayfinding work remain separate.
+
 Two pieces:
 
 1. **`index.html`** — the player. A single file, no install, no server required.

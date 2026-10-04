@@ -171,6 +171,7 @@
   <button class="tbtn" id="prevChap" title="Previous chapter" aria-label="Previous chapter">⏮</button>
   <div id="nowChap"></div>
   <button class="tbtn" id="nextChap" title="Next chapter" aria-label="Next chapter">⏭</button>
+  <button class="tbtn" id="searchBtn" title="Search this book" aria-label="Search this book" disabled>Search</button>
   <button class="tbtn" id="settingsBtn" title="Display &amp; timer" aria-label="Settings">Aa</button>
 </header>
 
@@ -603,7 +604,7 @@
     if(i<0 || i>=segs.length) return;
     readingSeg=i; setPage(pageOf(i)); save();
   }
-  function turnPage(dir){ comfortSessionAnchor=null;
+  function turnPage(dir){ cancelSearchNavigation();comfortSessionAnchor=null;
     if(pages.length<2) return;
     lastUserInput=Date.now();
     const target=Math.max(0,Math.min(pages.length-1,(curPage<0?0:curPage)+dir));
@@ -630,7 +631,7 @@
     const sg=e.target.closest(".seg");
     if(sg){ seekTo(segs[+sg.dataset.i].start); }
   }
-  function seekTo(t){ if(mode==="text")return;audio.currentTime=t+0.001; if(audio.paused) audio.play(); }
+  function seekTo(t){ cancelSearchNavigation();if(mode==="text")return;audio.currentTime=t+0.001; if(audio.paused) audio.play(); }
   function navigateTextSeg(i,smooth,doSave){
     if(mode!=="text"||!segs.length) return; i=Math.max(0,Math.min(segs.length-1,Number.isInteger(i)?i:0));
     readingSeg=i; curSeg=-1; setSeg(i); setChap(segs[i].start); const p=pageOf(i); setPage(p);
@@ -707,6 +708,7 @@
     if(sheetKind==="chapters") markCurrentChapter();
   }
   function tick(){
+    if(searchOwner)return;
     if(mode==="text")return;
     const t=audio.currentTime;
     setSeg(findSeg(t)); setWord(t); setChap(t);
@@ -722,10 +724,10 @@
     const ms=navigator.mediaSession;
     const set=(a,fn)=>{ try{ ms.setActionHandler(a,fn); }catch(e){} };
     set("play",()=>resumePlay());
-    set("pause",()=>audio.pause());
-    set("seekbackward",d=>{ audio.currentTime=Math.max(0,audio.currentTime-((d&&d.seekOffset)||15)); });
-    set("seekforward",d=>{ audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+((d&&d.seekOffset)||15)); });
-    set("seekto",d=>{ if(d.fastSeek && "fastSeek" in audio){ audio.fastSeek(d.seekTime); return; } audio.currentTime=d.seekTime; });
+    set("pause",()=>{cancelSearchNavigation();audio.pause();});
+    set("seekbackward",d=>{ cancelSearchNavigation(); audio.currentTime=Math.max(0,audio.currentTime-((d&&d.seekOffset)||15)); });
+    set("seekforward",d=>{ cancelSearchNavigation(); audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+((d&&d.seekOffset)||15)); });
+    set("seekto",d=>{ cancelSearchNavigation(); if(d.fastSeek && "fastSeek" in audio){ audio.fastSeek(d.seekTime); return; } audio.currentTime=d.seekTime; });
     set("previoustrack",()=>{ if(playlist) prevTrack(); else jumpChapter(-1); });
     set("nexttrack",()=>{ if(playlist) nextTrack(); else jumpChapter(1); });
   }
@@ -755,7 +757,7 @@
     seekTo(chapters[target].start);
   }
   // whole-book chapter skip: crosses tracks via globalChaps (single-file falls back to jumpChapter)
-  function skipChapter(dir){
+  function skipChapter(dir){ cancelSearchNavigation();
     if(mode==="text"){
       if(!chapters.length)return;let base=curChap<0?0:curChap,target=Math.max(0,Math.min(chapters.length-1,base+dir));
       navigateTextSeg(chapters[target].seg,false,true);return;
@@ -780,7 +782,7 @@
   // While paused with the reader scrolled ahead, `seg` is the furthest point and wins on restore.
   let lastSave=0;
   function posSeg(){ return ((mode==="text"||audio.paused) && readingSeg>=0) ? readingSeg : curSeg; }
-  function save(force){ if(!positionReady)return;const n=Date.now(); if(!force&&n-lastSave<1500) return; lastSave=n;
+  function save(force){ if(searchOwner&&!searchOwner.complete)return;if(!positionReady)return;const n=Date.now(); if(!force&&n-lastSave<1500) return; lastSave=n;
     if(mode==="text"){saveBookPosition();return;}
     try{ storageSet(posKey(), JSON.stringify(mode==="text"?{seg:Math.max(0,posSeg())}:{t:audio.currentTime, seg:posSeg()})); }catch(e){}
     if(playlist) savePlaylistPos(); }
@@ -1212,6 +1214,7 @@
   // ---------- transport ----------
   // The read->listen handoff: if you read ahead while paused, play continues from the reading place.
   function resumePlay(){
+    cancelSearchNavigation();
     if(mode==="text")return;
     if(readingSeg>=0 && segs[readingSeg] && readingSeg!==findSeg(audio.currentTime))
       audio.currentTime=segs[readingSeg].start+0.001;
@@ -1223,6 +1226,8 @@
   $("#fwd").onclick =()=>{ if(mode!=="text"){comfortSessionAnchor=null;audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+15); }};
   $("#prevChap").onclick=()=>skipChapter(-1);
   $("#nextChap").onclick=()=>skipChapter(1);
+  document.addEventListener("click",e=>{if(e.target.closest("#play,#back,#fwd,#prevChap,#nextChap,#follow,.seg,.chap"))cancelSearchNavigation();},true);
+  $("#seek").addEventListener("input",cancelSearchNavigation);
   const rates=[0.8,1,1.25,1.5,2], RATE_KEY="inn-reader-rate";
   let ri=(()=>{ const v=parseInt(storageGet(RATE_KEY),10); return (v>=0&&v<rates.length)?v:1; })();
   function applyRate(){ audio.playbackRate=rates[ri]; $("#rate").textContent=rates[ri]+"×";
@@ -1233,14 +1238,17 @@
       else if(segEls[curSeg]) segEls[curSeg].scrollIntoView({block:"center",behavior:"smooth"}); } };
   $("#seek").oninput=e=>{ if(mode!=="text"&&audio.duration){ comfortSessionAnchor=null; audio.currentTime=e.target.value/1000*audio.duration; } };
 
-  audio.addEventListener("play",()=>{ comfortSessionAnchor=null; if(mode==="text"){audio.pause();return;}$("#play").textContent="❚❚";
+  audio.addEventListener("play",()=>{ cancelSearchNavigation();comfortSessionAnchor=null; if(mode==="text"){audio.pause();return;}$("#play").textContent="❚❚";
     if("mediaSession" in navigator) navigator.mediaSession.playbackState="playing";
     acquireWake(); cancelAnimationFrame(rafId); rafId=requestAnimationFrame(tick); });
   audio.addEventListener("pause",()=>{ comfortSessionAnchor=null; if(mode==="text")return;$("#play").textContent="▶";
     if("mediaSession" in navigator) navigator.mediaSession.playbackState="paused";
+    if(searchOwner){searchOwner.pausePending=false;releaseWake();finishSearchNavigation(searchOwner);return;}
     readingSeg=-1; pausedAt=Date.now();  // fresh pause: no divergence until a post-pause reader gesture
     releaseWake(); save(); });
-  audio.addEventListener("seeked",()=>{ comfortSessionAnchor=null; if(mode==="text")return;const t=audio.currentTime; readingSeg=-1;  // explicit audio move
+  audio.addEventListener("seeked",()=>{ comfortSessionAnchor=null; if(mode==="text")return;
+    if(searchOwner){if(audio.currentTime===searchOwner.target){searchOwner.seekPending=false;finishSearchNavigation(searchOwner);return;}cancelSearchNavigation();}
+    const t=audio.currentTime; readingSeg=-1;  // explicit audio move
     setSeg(findSeg(t)); setWord(t); setChap(t);
     $("#cur").textContent=fmt(t); updatePosition(); });
   audio.addEventListener("seeking",()=>{ comfortSessionAnchor=null; });
@@ -1264,10 +1272,234 @@
   audio.addEventListener("error",()=>{ if(mode!=="text"&&audio.src) toast("Couldn't load that audio file."); });
   audio.addEventListener("ended",()=>{ if(mode!=="text"&&playlist && playlist.idx+1<playlist.tracks.length) nextTrack(); });
 
+  // LOCAL_SEARCH_BEGIN
+  // Search consumes source text incrementally; the only retained transform is
+  // the query-sized suffix needed for literal matching and source offsets.
+  function searchQuery(raw){
+    const trimmed=raw.trim(); let count=0, out="", space=false;
+    for(const cp of trimmed){
+      if(++count>256) throw new Error("Use at most 256 characters.");
+      if(/\s/u.test(cp)){space=true;continue;}
+      if(space){out+=" ";space=false;}
+      out+=cp.toLowerCase();
+    }
+    return out;
+  }
+  function searchCursor(query){
+    const failure=new Array(query.length).fill(0);
+    for(let i=1,j=0;i<query.length;i++){
+      while(j && query[i]!==query[j])j=failure[j-1];
+      if(query[i]===query[j])j++;
+      failure[i]=j;
+    }
+    return {query,failure,seg:0,offset:0,matched:0,units:0,
+      ring:new Array(query.length),whitespace:null,done:!query.length};
+  }
+  function cloneSearchCursor(c){
+    return Object.assign({},c,{ring:c.ring.slice(),
+      whitespace:c.whitespace?Object.assign({},c.whitespace):null});
+  }
+  function searchSlice(segments,c,maxHits=51){
+    const hits=[];let consumed=0,steps=0;
+    const emit=(text,start,end)=>{
+      for(let k=0;k<text.length;k++){
+        const slot=c.units%c.query.length;
+        c.ring[slot]={start,end,first:k===0,last:k===text.length-1};c.units++;
+        while(c.matched && text[k]!==c.query[c.matched])c.matched=c.failure[c.matched-1];
+        if(text[k]===c.query[c.matched])c.matched++;
+        if(c.matched===c.query.length){
+          const first=c.ring[(c.units-c.query.length)%c.query.length],last=c.ring[(c.units-1)%c.query.length];
+          if(first.first && last.last){
+            hits.push({seg:c.seg,start:first.start,end:last.end});c.matched=0;
+          }else c.matched=c.failure[c.matched-1];
+        }
+      }
+    };
+    while(!c.done && consumed<16384 && hits.length<maxHits && steps++<16384){
+      if(c.seg>=segments.length){c.done=true;break;}
+      const text=segments[c.seg].text;
+      if(c.offset>=text.length){
+        if(c.whitespace){emit(" ",c.whitespace.start,c.whitespace.end);c.whitespace=null;}
+        c.seg++;c.offset=0;c.matched=0;c.units=0;c.ring.fill(null);
+        if(c.seg>=segments.length)c.done=true;
+        continue;
+      }
+      const cp=String.fromCodePoint(text.codePointAt(c.offset));
+      if(consumed+cp.length>16384)break;
+      const start=c.offset,end=start+cp.length;
+      if(/\s/u.test(cp)){
+        if(c.whitespace)c.whitespace.end=end;else c.whitespace={start,end};
+        c.offset=end;consumed+=cp.length;
+      }else{
+        if(c.whitespace){
+          emit(" ",c.whitespace.start,c.whitespace.end);c.whitespace=null;
+          if(hits.length>=maxHits)break;
+        }
+        emit(cp.toLowerCase(),start,end);c.offset=end;consumed+=cp.length;
+      }
+    }
+    return {hits,consumed,done:c.done};
+  }
+  function searchExcerpt(text,start,end){
+    // Walk only the hit and a bounded neighborhood, never Array.from(book).
+    const previous=i=>i>1 && /[\uDC00-\uDFFF]/.test(text[i-1]) && /[\uD800-\uDBFF]/.test(text[i-2])?i-2:i-1;
+    const next=i=>i+String.fromCodePoint(text.codePointAt(i)).length;
+    let hitEnd=start,hitCount=0;
+    while(hitEnd<end && hitCount<118){hitEnd=next(hitEnd);hitCount++;}
+    let left=start,right=hitEnd,room=118-hitCount;
+    for(let n=0;n<Math.floor(room/2)&&left>0;n++)left=previous(left);
+    let used=hitCount;
+    for(let i=left;i<start;i=next(i))used++;
+    while(used<118&&right<text.length){right=next(right);used++;}
+    while(used<118&&left>0){left=previous(left);used++;}
+    return {before:text.slice(left,start),match:text.slice(start,Math.min(end,right)),
+      after:text.slice(Math.min(end,right),right),leading:left>0,trailing:right<text.length};
+  }
+  // LOCAL_SEARCH_END
+  // Search state belongs to admitted documents, never import attempts.
+  let searchGeneration=0, searchRun=0, searchOwner=null, searchPlain=-1;
+  let searchState={query:"",hits:[],pending:null,cursor:null,busy:false,message:"Enter text to search."};
+  function admitSearchDocument(){
+    ++searchGeneration;++searchRun;searchOwner=null;searchPlain=-1;
+    searchState={query:"",hits:[],pending:null,cursor:null,busy:false,message:"Enter text to search."};
+    $("#searchBtn").disabled=!segs.length;
+    if(sheetKind==="search")closeSheet();
+    if($("#searchQuery"))clear($("#sheet"));
+  }
+  function cancelSearchNavigation(){
+    searchOwner=null;
+    if(searchPlain>=0){
+      const i=searchPlain;searchPlain=-1;
+      if(mode!=="text" && curSeg===i){curSeg=-1;setSeg(i);}
+    }
+  }
+  function cancelSearchScan(){
+    ++searchRun;
+    if(searchState.busy){searchState.busy=false;searchState.message="Search paused; continue or search again.";}
+  }
+  function searchChapter(i){
+    let found=null;
+    for(const c of chapters){
+      if(Number.isInteger(c.seg)?c.seg<=i:c.start<=segs[i].start)found=c;
+    }
+    return found?found.title+" · Segment "+(i+1):"Segment "+(i+1);
+  }
+  function renderSearch(){
+    const typed=$("#searchQuery")?.value;
+    const sheet=$("#sheet");clear(sheet);
+    sheet.setAttribute("role","dialog");sheet.setAttribute("aria-modal","true");sheet.setAttribute("aria-labelledby","searchHeading");
+    sheet.appendChild(el("h2",{id:"searchHeading",text:"Search this book"}));
+    const input=el("input",{id:"searchQuery",type:"text",autocomplete:"off",spellcheck:"false"});input.value=typed??searchState.query;
+    const form=el("form",{},[el("label",{for:"searchQuery",text:"Literal phrase"}),input,el("button",{type:"submit",text:"Search"})]);
+    form.onsubmit=e=>{e.preventDefault();startSearch(input.value);};sheet.appendChild(form);
+    sheet.appendChild(el("p",{id:"searchStatus",role:"status","aria-live":"polite",text:searchState.message}));
+    const list=el("div",{class:"clist",id:"searchResults"});
+    for(const hit of searchState.hits){
+      const excerpt=searchExcerpt(segs[hit.seg].text,hit.start,hit.end);
+      const button=el("button",{type:"button"},[
+        el("span",{class:"ct",text:searchChapter(hit.seg)}),
+        excerpt.leading?"…":"",excerpt.before,el("mark",{text:excerpt.match}),excerpt.after,excerpt.trailing?"…":""]);
+      button.onclick=()=>navigateSearchHit(hit);list.appendChild(button);
+    }
+    sheet.appendChild(list);
+    if(searchState.cursor && (!searchState.cursor.done||searchState.pending) && searchState.hits.length<500){
+      const more=el("button",{type:"button",id:"searchMore",text:"Load more"});more.disabled=searchState.busy;more.onclick=()=>continueSearch();sheet.appendChild(more);
+    }
+    sheet.appendChild(el("button",{type:"button",id:"searchClose",text:"Close",onclick:closeSheet}));
+  }
+  function publishSearch(){if(sheetKind==="search"){
+    const active=document.activeElement,id=active?.id,inside=$("#sheet").contains(active);
+    renderSearch();if(inside)(id&&document.getElementById(id)||$("#searchQuery")).focus();
+  }}
+  function startSearch(raw){
+    cancelSearchScan();
+    searchState={query:raw,hits:[],pending:null,cursor:null,busy:false,message:"Enter text to search."};
+    try{
+      const query=searchQuery(raw);
+      if(!query){publishSearch();$("#searchQuery")?.focus();return;}
+      searchState.cursor=searchCursor(query);continueSearch();
+    }catch(e){searchState.message=e.message==="Use at most 256 characters."?e.message:"Unable to search. Try again.";publishSearch();$("#searchQuery")?.focus();}
+  }
+  async function continueSearch(){
+    if(searchState.busy||!searchState.cursor||(searchState.cursor.done&&!searchState.pending)||searchState.hits.length>=500)return;
+    const state=searchState,run=++searchRun,generation=searchGeneration,source=segs;
+    const cursor=cloneSearchCursor(state.cursor),batch=state.pending?[state.pending]:[];
+    const limit=Math.min(50,500-state.hits.length),current=()=>run===searchRun&&generation===searchGeneration&&state===searchState&&sheetKind==="search";
+    state.busy=true;state.message="Searching…";publishSearch();
+    try{
+      while(!cursor.done&&batch.length<=limit){
+        await new Promise(resolve=>setTimeout(resolve,0));if(!current())return;
+        const result=searchSlice(source,cursor,limit+1-batch.length);batch.push(...result.hits);
+        if(batch.length>limit)break;
+      }
+      if(!current())return;
+      state.hits.push(...batch.slice(0,limit).map(hit=>Object.assign(hit,{generation})));
+      state.pending=batch.length>limit?Object.assign(batch[limit],{generation}):null;
+      state.cursor=cursor;state.busy=false;
+      state.message=state.hits.length===500&&state.pending?"First 500 matches; refine your search.":
+        cursor.done&&!state.pending?state.hits.length+" matches.":"At least "+(state.hits.length+1)+" matches.";
+      if(state.hits.length===500&&state.pending)state.pending=null;
+      publishSearch();
+    }catch(e){
+      if(!current())return;state.busy=false;state.message="Unable to search. Try again.";publishSearch();
+    }
+  }
+  function validSearchHit(hit){
+    if(hit.generation!==searchGeneration||!searchState.hits.includes(hit)||!segs[hit.seg])return false;
+    const text=segs[hit.seg].text;
+    const boundary=n=>n===0||n===text.length||!(/[\uDC00-\uDFFF]/.test(text[n])&&/[\uD800-\uDBFF]/.test(text[n-1]));
+    return Number.isInteger(hit.start)&&Number.isInteger(hit.end)&&hit.start>=0&&hit.start<hit.end&&hit.end<=text.length&&boundary(hit.start)&&boundary(hit.end);
+  }
+  function finishSearchNavigation(owner){
+    if(owner!==searchOwner||!validSearchHit(owner.hit)||owner.pausePending||owner.seekPending)return;
+    const hit=owner.hit,p=segEls[hit.seg],rd=$("#reader");
+    try{
+      if(!p)throw new Error();
+      p.textContent=segs[hit.seg].text;
+      if(paged)buildPagesPaged();
+      const nodes=segmentTextNodes(p),info=paged?rangeColumn(p,nodes,hit.start):rangeGeometry(p,nodes,hit.start);
+      if(!info)throw new Error();
+      if(curSeg>=0&&segEls[curSeg]&&curSeg!==hit.seg){segEls[curSeg].classList.remove("cur");segEls[curSeg].textContent=segs[curSeg].text;}
+      curSeg=hit.seg;curWordEls=null;searchPlain=hit.seg;p.classList.add("cur");p.classList.remove("read");
+      readingSeg=hit.seg;setChap(segs[hit.seg].start);
+      if(paged){setPage(info.col);goToCol(info.col,false);}
+      else{const old=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-12;rd.style.scrollBehavior=old;setPage(pageOf(hit.seg));}
+      pausedAt=Date.now();lastUserInput=0;owner.complete=true;save(true);
+    }catch(e){searchOwner=null;toast("Unable to show this match");}
+  }
+  function navigateSearchHit(hit){
+    if(!validSearchHit(hit)){toast("Unable to show this match");return;}
+    cancelSearchNavigation();
+    const target=segs[hit.seg].start;
+    const playable=mode!=="text"&&!!(audio.currentSrc||audio.getAttribute("src"))&&Number.isFinite(audio.duration)&&target>=0&&target<=audio.duration;
+    const owner={hit,pausePending:!audio.paused,seekPending:playable&&audio.currentTime!==target,target,complete:false};
+    searchOwner=owner;closeSheet();cancelAnimationFrame(rafId);rafId=null;
+    try{
+      if(owner.pausePending)audio.pause();
+      if(owner.seekPending)audio.currentTime=target;
+      finishSearchNavigation(owner);
+    }catch(e){searchOwner=null;audio.pause();toast("Unable to show this match");}
+  }
+  function searchSheetKey(e){
+    if(sheetKind!=="search")return false;
+    if(e.key==="Escape"){e.preventDefault();closeSheet();}
+    else if(e.key==="Tab"){
+      const controls=Array.from($("#sheet").querySelectorAll("input,button")).filter(n=>!n.disabled);
+      const first=controls[0],last=controls[controls.length-1];
+      if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+      else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+    }
+    return true;
+  }
+
+
   // ---------- bottom sheet ----------
-  function openSheet(kind){ if(kind==="settings") comfortSessionAnchor=null; sheetKind=kind; (kind==="chapters"?renderChapters:renderSettings)();
-    $("#scrim").classList.add("on"); $("#sheet").classList.add("on"); }
-  function closeSheet(){ comfortSessionAnchor=null; sheetKind=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on"); }
+  function openSheet(kind){ if(sheetKind==="search")cancelSearchScan();if(kind==="settings") comfortSessionAnchor=null; sheetKind=kind;
+    if(kind!=="search"){for(const key of ["role","aria-modal","aria-labelledby"])$("#sheet").removeAttribute(key);}
+    (kind==="search"?renderSearch:kind==="chapters"?renderChapters:renderSettings)();
+    $("#scrim").classList.add("on"); $("#sheet").classList.add("on");if(kind==="search")$("#searchQuery").focus(); }
+  function closeSheet(){ const search=sheetKind==="search";if(search)cancelSearchScan();comfortSessionAnchor=null; sheetKind=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on");if(search)$("#searchBtn").focus(); }
+  $("#searchBtn").onclick=()=>{if(segs.length)openSheet("search");};
   $("#scrim").onclick=closeSheet;
   $("#chaptersBtn").onclick=()=>openSheet("chapters");
   $("#settingsBtn").onclick=()=>openSheet("settings");
@@ -1327,6 +1559,7 @@
 
   // ---------- keyboard (desktop) ----------
   document.addEventListener("keydown",e=>{
+    if(searchSheetKey(e))return;
     if(!$("#reader").classList.contains("on")) return;
     const tag=(e.target.tagName||"").toLowerCase();
     if(tag==="input"||tag==="textarea") return;
@@ -1409,7 +1642,7 @@
       mode="audio";sourceIdentity="";currentFormat="";positionReady=true;
       doc=d; isDemo=false; pendingAudioFile=t.audioFile||null;
       pendingSeek=Math.max(0, seekT||0); pendingAutoplay=!!autoplay;
-      build(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
+      build(); admitSearchDocument(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
       if(curObjUrl){ URL.revokeObjectURL(curObjUrl); curObjUrl=null; }   // free the previous track's blob URL
       setSeg(0); setChap(0);
       return trackAudioSrc(t).then(src=>{ if(token===loadToken&&epoch===loadEpoch&&mode!=="text")audio.src=src; });  // -> loadedmetadata seeks/autoplays
@@ -1467,7 +1700,7 @@
     const committed=commitGenericDoc(nextDoc,"generic "+format,token,()=>loadEpoch,()=>{
       mode="text";sourceIdentity=identity;sourceIdentityStable=identityStable;currentFormat=format;positionReady=false;
       playlist=null;dbxBook=null;isDemo=false;pendingAudioFile=null;teardownAudioForText();doc=nextDoc;
-      curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();bookSavedStatus(saved);showReaderUI();
+      curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();admitSearchDocument();bookSavedStatus(saved);showReaderUI();
       navigateTextSeg(genericRestoreSeg(position?.seg,segs.length),false,false);positionReady=true;lastSave=0;
       bookSavedStatus(saved);
     });
@@ -1503,7 +1736,7 @@
     const bad=validateDoc(doc, isDemo?"demo data":"this read-along file");
     if(bad){ alert("This read-along file can't be played:\n\n"+bad); return; }
     mode="audio";sourceIdentity="";currentFormat="";positionReady=true;playlist=null; dbxBook=null;
-    build(); showReaderUI(); updateMetadata();
+    build(); admitSearchDocument(); showReaderUI(); updateMetadata();
     setSeg(0); setChap(0);
     saveSession();
   }
