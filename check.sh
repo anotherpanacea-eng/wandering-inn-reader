@@ -57,5 +57,7 @@ echo "→ generic-ingest behavioral/security test (mandatory, no skips)"
 "$PYTHON" tools/run_node_tests.py tests/test_generic_ingest.mjs
 echo "→ local-search source-offset behavioral test (mandatory, no skips)"
 "$PYTHON" tools/run_node_tests.py tests/test_search.mjs
+echo "Annotation source-range and persistence contract tests (mandatory, no skips)"
+"$PYTHON" tools/run_node_tests.py tests/test_annotations.mjs
 
 echo "✓ all local checks passed"
