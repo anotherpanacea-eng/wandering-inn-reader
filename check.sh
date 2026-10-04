@@ -60,4 +60,7 @@ echo "→ local-search source-offset behavioral test (mandatory, no skips)"
 echo "Annotation source-range and persistence contract tests (mandatory, no skips)"
 "$PYTHON" tools/run_node_tests.py tests/test_annotations.mjs
 
+echo "Source-progress tests (mandatory, no skips)"
+"$PYTHON" tools/run_node_tests.py tests/test_progress.mjs
+
 echo "✓ all local checks passed"

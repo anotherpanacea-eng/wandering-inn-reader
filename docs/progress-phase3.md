@@ -1,0 +1,11 @@
+# Source position and time left (Phase3C)
+
+Saved text books display **Position** from original source characters, including whitespace, rather than paragraph count. The displayed **Estimated time left** assumes a fixed 200 whitespace-delimited words per minute; it is not a measured reading speed. A partly traversed word remains one word. Audio timing and playback remain separate.
+
+Scroll or turn a page to update your position. Search and annotation navigation preserve their exact source offsets. Font, measure, viewport and reading-mode changes retain that point. Saved offsets reopen at the same source character; the layout may differ. The shelf shows the committed saved position, while a failed save leaves the reader labeled **Latest position not saved**.
+
+**Finish book** explicitly records your report that you finished, displays 100% and zero minutes, and survives reopening and layout changes. Earlier reading/navigation clears it. Opening a short book never automatically finishes it. Empty text cannot be finished; whitespace-only text has no useful time estimate unless explicitly finished.
+
+Older segment-only or invalid-offset positions remain readable and explicitly approximate. Opening or changing layout does not repair them silently. A genuine reading/navigation gesture establishes a precise offset when the existing book-instance binding is available. If unavailable, ordinary segment saving still works and the exact-position limitation is displayed; that legacy fallback cannot distinguish same-byte deletion/reimport lifetimes. Precise writes use the existing immutable instance, generation and source checks, preserve notes and metadata, and never recreate deleted books. Same-source reimport preserves the point; changed unannotated source restores approximately.
+
+All data remains in the existing browser library. There is no reading telemetry, pace monitoring, new database store or network service. Browser storage can be cleared; keep your source files. Desktop checks do not qualify phone layouts or real narration.
