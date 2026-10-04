@@ -52,7 +52,12 @@ Point = {seg,offset}, both nonnegative safe integers; seg exists; offset is a
 UTF16 boundary in [0,text.length]. Never split a surrogate pair. A bookmark must
 point to an actual character (offset<length). A highlight is ordered half-open
 {start:Point,end:Point}, may cross segments, and contains at least one source
-character. Equal points are invalid. Cross-segment ranges include the suffix,
+character. Canonicalize start to the first included source character and end to
+the boundary immediately after the last included source character, crossing
+empty suffixes/prefixes or empty segments as needed without trimming whitespace.
+For alpha then beta, {0,5}..{1,2} becomes {1,0}..{1,2}; bookmark/navigation
+therefore targets b rather than the preceding a. A range with no included source
+character is refused. Equal canonical points are invalid. Cross-segment ranges include the suffix,
 all intervening segment texts and final prefix, with no invented separators.
 
 Capture the browser Selection before opening an editor; normalize forward and
@@ -76,12 +81,17 @@ keeps current anchors valid. Closing an editor never creates an annotation.
 
 ## 4. Ordinary persisted records and concurrent edits
 
-Embed optional annotations in the existing books record; no new object store or
+Embed optional annotations and annotationInstance in the existing books record; no new object store or
 DB version is needed. Absent annotations means empty. Proposed format:
 
 ```json
 {"version":1,"nextId":1,"items":[]}
 ```
+
+Validate version===1; nextId is a positive safe integer strictly greater than
+every existing item ID; items is an array within the declared bound. Edits and
+deletes never lower nextId or reuse an ID. Unknown envelope/item fields refuse
+annotation mutation while preserving the raw field.
 
 Each item has exactly id (positive safe integer), revision (positive safe integer),
 kind (bookmark or highlight), start (Point), end (Point for highlight only),
@@ -97,6 +107,25 @@ book, label at most120 Unicode scalars, note at most8192 UTF16 units. Refuse
 oversize creation/edit visibly; never truncate. Count source scalars correctly,
 including supplementary characters. Empty label/note is legal. These ordinary
 bounds limit DOM/storage work; review may change them before build.
+
+annotationInstance identifies one persisted book lifetime. Create a fresh ordinary
+local UUID using the browser cryptographic random-byte API when admitting or
+migrating a new saved book; preserve it on same-lifetime reimport. A readable
+legacy record lacking it receives one transactionally when annotations first
+open, before enabling creation/editing; preserve raw annotations unchanged.
+A malformed existing instance refuses annotation writes without repair. Browsers
+without the random-byte API report annotations unavailable, without affecting
+reading; digest availability is irrelevant, so saved fallback identities remain
+eligible. This identifier addresses the demonstrated delete/reimport ABA race;
+it is an ordinary local identity, with no signing, hashing, secrecy or approval
+role. Collision resistance is probabilistic, not an adversarial custody claim.
+
+Every annotation read/editor/submission captures annotationInstance, and each
+write compares it with the latest stored book inside the transaction. Missing
+or different instance is a stale-book refusal, retaining input for inspection
+and requiring reopen before retry. Delete followed by same-byte reimport must
+create a new instance even if source identity, text, itemid and revision match.
+Separate from admitted UI generation, this persists across tabs and reloads.
 
 Read-modify-write the latest book inside one readwrite transaction for each
 create/edit/delete. Revalidate book, admitted ordered source texts, annotation
@@ -125,7 +154,7 @@ annotation mutations; never auto-reset corrupt/unknown-version data. No repair
 or clear-all action in this increment. Base-book reading and position writes
 remain available and must retain the raw annotation field.
 
-Same-identity import preserves the entire old annotation field, including unknown
+Same-identity import preserves annotationInstance and the entire old annotation field, including unknown
 or malformed data, when ordered admitted source texts are equal. Compare ordinary
 strings, no new digest/cache. If existing annotated source text differs, refuse
 replacement of the stored book rather than guessing offsets or erasing notes;
@@ -178,7 +207,8 @@ No source edits are authorized by this specification grant.
 
 Required proof with invented text and actual IndexedDB/browser geometry:
 1. Source-only forward/backward and element/text selections; cross-segment range;
-   surrogate boundaries, mixed chapter/outside selection and stale editor refusal.
+   surrogate boundaries, mixed chapter/outside selection and stale editor refusal;
+   an end-of-segment start canonicalizes to the next included character.
 2. Highlight + note and bookmark survive reload/reopen; two different books and
    same titles remain isolated; saved fallback-identity book works; identical
    stable reimport retains marks; changed projection refuses stored replacement.
@@ -186,7 +216,9 @@ Required proof with invented text and actual IndexedDB/browser geometry:
    notes/labels, bounds and malformed/unknown stored annotations behave as above.
 4. Real transaction abort/quota-style failure does not claim Saved or lose input;
    missing book, competing creates, stale edit/delete and delete-versus-save do
-   not overwrite or resurrect data. No success based only on mocked callbacks.
+   not overwrite or resurrect data. A two-tab delete/reimport/reused-id-and-revision
+   trace refuses the old editor by instance; invalid nextId and deletion
+   monotonicity are covered. No success based only on mocked callbacks.
 5. Scroll and paged navigation reaches later source characters after font/mode/
    viewport reflow; geometry failure does not write a new position. Existing
    reading, search and audio paths remain intact with annotation controls disabled
