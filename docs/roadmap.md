@@ -22,34 +22,51 @@ Each phase produces the existing data contract and is its own `spec → review �
 
 ## Phases
 
-| # | Phase | Issue | Depends on | Effort |
-|---|-------|-------|-----------|--------|
-| 0 | Prove the generic path (EPUB/TXT/MD ingest, text-only) | [#28](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/28) | — | M–L |
-| 1 | Library (multi-book, IndexedDB) | [#29](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/29) | #28 | L |
-| 2 | Reading comfort (typography & themes) | [#30](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/30) | #28 | M |
-| 3 | Wayfinding (search, bookmarks, highlights, progress) | [#31](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/31) | #28, #29 | M–L |
-| 4 | AI / generated voice (TTS streaming) — **decision open** | [#32](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/32) | engine; 4b → #29 | 4a M / 4b L |
+Current disposition checked 2026-10-04 against main `43558c4`. Phases 0–2 are
+landed; the notes below identify their bounded shipped behavior. This is a
+repository-state reconciliation, not a new browser or device qualification.
 
-### Phase 0 — Prove the generic path
-A real EPUB renders in the existing engine with **zero engine changes**. In-browser
-`EPUB → doc` behind the current Load flow (one book at a time, no library yet); TXT/Markdown
-too. Dep-free: `DecompressionStream('deflate-raw')` to unzip, `DOMParser` to walk the OPF
-spine + `nav` TOC → the existing `segments[]` (no timings). **Proof:** a stripped EPUB shows
-chapters, paging, resume, font sizing — no edits to `build()`. **Out:** PDF (not reflowable;
-needs pdf.js — explicit non-goal).
+| # | Phase | Issue | Current disposition |
+|---|-------|-------|---------------------|
+| 0 | Generic path (EPUB/TXT/MD ingest, text-only) | [#28](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/28) | Landed in [train #40](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/40), `9693ebd` |
+| 1 | Library (multi-book, IndexedDB) | [#29](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/29) | Landed in [train #49](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/49), `43558c4` |
+| 2 | Reading comfort (typography & themes) | [#30](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/30) | Landed in [train #42](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/42), `85408b2` |
+| 3 | Wayfinding (search, bookmarks, highlights, progress) | [#31](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/31) | Open; search, annotation and progress contracts/builds are unmerged drafts |
+| 4 | AI / generated voice (TTS streaming) | [#32](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/32) | Open; owner decision required before implementation |
 
-### Phase 1 — Library *(the one architectural shift)*
-Keep many books, not one document. **IndexedDB** book store (EPUBs are too big for
-`localStorage`); shelf UI (covers, last-read, progress); import/delete; migrate the single
-`localStorage` position marker → **per-book**. Everything else in the roadmap is additive;
-this is the only structural change. Unlocks per-book annotations (Phase 3) and the optional
-local voice model (Phase 4b).
+### Phase 0 — Generic path: landed
 
-### Phase 2 — Reading comfort
-Font family (serif/sans/dyslexic), line-height, margins/measure, justification +
-hyphenation; themes (light/sepia/dark/OLED-black) + brightness. Built on the existing
-CSS-column foundation. **Parallelizable** — depends only on the engine, so it can run
-alongside Phase 1.
+The Load flow accepts TXT, bounded Markdown and EPUB 3 through
+`genericDocFromBytes()` into the existing text-only reader projection. EPUB
+admission has explicit archive, package and resource bounds; compressed members
+require browser raw-deflate support. See [the ingest contract](spec-generic-ingest-phase0.md).
+[Feature #36](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/36)
+landed through train #40. Its recorded acceptance includes synthetic packages
+and a stripped Gutenberg EPUB 3 in Chromium; the additional macOS receipt
+remains absent. This does not establish arbitrary EPUB or all-browser support.
+PDF remains out of scope.
+
+### Phase 1 — Library: landed
+
+The IndexedDB saved-book library has a shelf, covers, import/delete and independent
+per-book segment resume, including migration of the old single-document position.
+[Feature #45](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/45)
+landed through train #49. See [the library contract](library-phase1.md) for storage
+refusals and migration behavior. Shelf progress is approximate; source-based
+progress and time-left belong to the open Phase 3 work. The saved-book library
+does not establish stable annotation identity for separate audio sessions.
+
+### Phase 2 — Reading comfort: landed
+
+Global persisted settings provide serif/sans font choices, an installed-font
+Dyslexic option with fallback, line-height, margins/measure, justification and
+best-effort hyphenation. Themes include system/light/sepia/dark/OLED, with an
+in-app dimmer. Comfort reflow retains the logical reading position in scroll and
+paged modes. [Feature #41](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/41)
+and its position-preservation fixes landed through train #42. Font availability and hyphenation
+remain device/browser dependent. Recorded comfort and library acceptance uses
+Chrome, including phone-width viewports; physical iOS/Safari acceptance remains
+unverified.
 
 ### Phase 3 — Wayfinding
 In-book search (over `segments[].text`); bookmarks; highlights + notes (persisted via
@@ -78,9 +95,9 @@ opt-in upgrade), but **not locked**.
 
 ## Sequencing
 
-`0` proves the thesis cheaply → `1` makes it a real library → `2`/`3` make it pleasant and
-navigable → `4` adds reach. **Parallelizable:** Phase 2 (comfort) and Phase 4a (Web Speech)
-depend only on the engine, so either can run alongside Phase 1.
+The original sequence was `0` → `1` → `2`/`3` → `4`. Phases 0–2 are now landed.
+Phase 3 still needs normal draft integration and qualification. Phase 4 remains
+held at its owner decision; the earlier parallelization option is not execution authority.
 
 ## Out of scope
 

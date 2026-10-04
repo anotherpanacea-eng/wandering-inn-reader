@@ -1,0 +1,1 @@
+Reconcile the generic-reader roadmap with landed ingestion, saved-library and reading-comfort trains. Keep wayfinding drafts and the generated-voice decision open, and distinguish shipped code from browser/device qualification.
