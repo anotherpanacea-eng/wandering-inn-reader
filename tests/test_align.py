@@ -8,7 +8,9 @@ No aeneas/torch needed — to_segments/attach_words/attach_chapters are pure Pyt
 only GENERATING a sync map needs a real aligner. Plain stdlib asserts (the repo has
 no pytest); run directly: `python3 tests/test_align.py`. Exit 0 = pass.
 """
-import contextlib, io, os, sys
+import contextlib, io, json, os, sys, tempfile, types
+from pathlib import Path
+from unittest.mock import patch
 
 try:                                  # cp1252 Windows console can't encode the check glyph
     sys.stdout.reconfigure(encoding="utf-8")
@@ -20,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "pipeline"))
 
 import align                       # noqa: E402
+import recombine_chapters           # noqa: E402
 from schema import validate_doc, SchemaError   # noqa: E402
 
 
@@ -83,12 +86,99 @@ def test_validate_doc_contract(segs):
         raise AssertionError("validate_doc accepted a segment with no start")
 
 
+def test_recombine_track_selection():
+    """Ambiguous filenames must never select audio or alter an output."""
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        media = root / "media"
+        media.mkdir()
+        chapters = root / "chapters"
+        chapters.mkdir()
+        track_map = root / "map.json"
+        track_map.write_text(json.dumps([
+            {"title": "First", "seg": 0, "tracks": [1]},
+            {"title": "Second", "seg": 1, "tracks": [2]},
+        ]), encoding="utf-8")
+        for i in range(2):
+            (chapters / f"chap{i:02d}_invented.json").write_text(json.dumps({
+                "title": "Invented", "audio": "unused.wav", "segments": [{
+                    "id": 0, "start": 2.0, "end": 4.0,
+                    "text": "Invented sentence.",
+                    "words": [{"w": "Invented", "s": 2.25, "e": 2.75}],
+                }],
+            }), encoding="utf-8")
+        output = root / "output.json"
+        argv = ["recombine", "--track-map", str(track_map),
+                "--audio-glob", str(media / "*.wav"),
+                "--chapters-dir", str(chapters), "--out", str(output),
+                "--title", "Invented book"]
+        # Equivalent numeric spellings must still be ambiguous. Test both used
+        # and unused duplicate numbers: the glob itself must be unambiguous.
+        (media / "02 - second.wav").touch()
+        for number in (1, 9):
+            if number == 9:
+                (media / "01 - first.wav").touch()
+            first = media / f"{number:02d} - first.wav"
+            second = media / f"{number} - second.wav"
+            first.touch()
+            second.touch()
+            for existing in (False, True):
+                if existing:
+                    output.write_bytes(b"retain this existing artifact")
+                fake_media = types.SimpleNamespace(info=lambda path: (_ for _ in ()).throw(
+                    AssertionError("ambiguous input reached media metadata")))
+                with patch.object(sys, "argv", argv), patch.dict(
+                        sys.modules, {"soundfile": fake_media}), contextlib.redirect_stdout(io.StringIO()):
+                    try:
+                        recombine_chapters.main()
+                    except SystemExit as exc:
+                        message = str(exc)
+                        assert first.name in message and second.name in message, message
+                    else:
+                        raise AssertionError("recombination accepted duplicate numeric tracks")
+                if existing:
+                    assert output.read_bytes() == b"retain this existing artifact"
+                    output.unlink()
+                else:
+                    assert not output.exists(), "refusal created an output"
+            first.unlink()
+            second.unlink()
+        # Unique roster: creation/glob order differs from map order. Ignore an
+        # unnumbered file and obtain timeline offsets from the selected tracks.
+        (media / "02 - second.wav").touch()
+        (media / "01 - first.wav").touch()
+        (media / "unnumbered.wav").touch()
+        durations = {"01 - first.wav": 10.0, "02 - second.wav": 20.0}
+        reads = []
+        def info(path):
+            name = Path(path).name
+            reads.append(name)
+            return types.SimpleNamespace(duration=durations[name])
+        with patch.object(sys, "argv", argv), patch.dict(
+                sys.modules, {"soundfile": types.SimpleNamespace(info=info)}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            recombine_chapters.main()
+        doc = json.loads(output.read_text(encoding="utf-8"))
+        validate_doc(doc)
+        assert doc["title"] == "Invented book"
+        assert doc["audio"] == "01 - first.wav"
+        assert [s["id"] for s in doc["segments"]] == [0, 1]
+        assert [s["start"] for s in doc["segments"]] == [2.0, 12.0]
+        assert [s["end"] for s in doc["segments"]] == [4.0, 14.0]
+        assert [s["words"][0]["s"] for s in doc["segments"]] == [2.25, 12.25]
+        assert [s["words"][0]["e"] for s in doc["segments"]] == [2.75, 12.75]
+        assert doc["chapters"] == [{"title": "First", "start": 2.0, "seg": 0},
+                                   {"title": "Second", "start": 12.0, "seg": 1}]
+        assert "unnumbered.wav" not in reads
+
+
 def main():
     segs = test_to_segments_skips_unusable()
     test_attach_words_packs_by_time(segs)
     test_attach_chapters_maps_and_drops(segs)
     test_validate_doc_contract(segs)
-    print("✓ test_align: to_segments / attach_words / attach_chapters / schema contract all pass")
+    test_recombine_track_selection()
+    print("✓ test_align: to_segments / attach_words / attach_chapters / schema / recombination contract all pass")
 
 
 if __name__ == "__main__":
