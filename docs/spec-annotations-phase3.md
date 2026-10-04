@@ -111,21 +111,34 @@ bounds limit DOM/storage work; review may change them before build.
 annotationInstance identifies one persisted book lifetime. Create a fresh ordinary
 local UUID using the browser cryptographic random-byte API when admitting or
 migrating a new saved book; preserve it on same-lifetime reimport. A readable
-legacy record lacking it receives one transactionally when annotations first
-open, before enabling creation/editing; preserve raw annotations unchanged.
-A malformed existing instance refuses annotation writes without repair. Browsers
+legacy record lacking it receives one transactionally during successful saved-book
+admission/open, before binding that session or enabling annotation UI; preserve
+raw annotations unchanged. If the random-byte API is unavailable, books still
+save/open normally, with annotation UI unavailable. A later capability change
+requires successful reopen before initialization/binding.
+Valid annotationInstance is a lowercase canonical version4 UUID string
+(8-4-4-4-12 hex groups, version nibble4, variant nibble8/9/a/b). A malformed
+existing instance refuses annotation writes without repair. Browsers
 without the random-byte API report annotations unavailable, without affecting
 reading; digest availability is irrelevant, so saved fallback identities remain
 eligible. This identifier addresses the demonstrated delete/reimport ABA race;
 it is an ordinary local identity, with no signing, hashing, secrecy or approval
 role. Collision resistance is probabilistic, not an adversarial custody claim.
 
-Every annotation read/editor/submission captures annotationInstance, and each
-write compares it with the latest stored book inside the transaction. Missing
+Bind expected annotationInstance once to each successfully admitted saved-book
+session from that completed admission/open transaction. Reads/editors/submissions
+inherit this immutable session value; a refreshed list never adopts a replacement
+instance. Compare it on every annotation read and write with the latest stored
+book inside the transaction. Missing
 or different instance is a stale-book refusal, retaining input for inspection
 and requiring reopen before retry. Delete followed by same-byte reimport must
 create a new instance even if source identity, text, itemid and revision match.
-Separate from admitted UI generation, this persists across tabs and reloads.
+A previously unbound surviving session cannot obtain a lifetime from a later
+list read; it must successfully reopen the saved book. Reload annotations never
+rebinds an editor lifetime or expected item revision; after an item conflict, a
+new edit must be opened from the refreshed item before another save. Preserve
+the old unsaved form for inspection/copy until the user explicitly cancels it.
+Separate from admitted UI generation, the persisted lifetime spans tabs/reloads.
 
 Read-modify-write the latest book inside one readwrite transaction for each
 create/edit/delete. Revalidate book, admitted ordered source texts, annotation
@@ -217,7 +230,9 @@ Required proof with invented text and actual IndexedDB/browser geometry:
 4. Real transaction abort/quota-style failure does not claim Saved or lose input;
    missing book, competing creates, stale edit/delete and delete-versus-save do
    not overwrite or resurrect data. A two-tab delete/reimport/reused-id-and-revision
-   trace refuses the old editor by instance; invalid nextId and deletion
+   trace refuses the old editor and a later list-read attempt by instance; only
+   successful book reopen can bind the replacement lifetime. Legacy initialization
+   and unavailable random-byte API keep ordinary reading/saving functional. Invalid nextId and deletion
    monotonicity are covered. No success based only on mocked callbacks.
 5. Scroll and paged navigation reaches later source characters after font/mode/
    viewport reflow; geometry failure does not write a new position. Existing
