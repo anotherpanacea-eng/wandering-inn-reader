@@ -1063,7 +1063,7 @@
     queueLibrary(()=>{if(mode!=="text"||sourceIdentity!==id||generation!==searchGeneration)throw new Error("STALE");return library.position(id,value,precise?ctx:null);}).then(ok=>{
       if(mode!=="text"||sourceIdentity!==id||generation!==searchGeneration)return;
       if(!ok){progressDirty=true;bookSavedStatus(false,"No longer saved on this device");}
-      else if(progressPosition?.seg===point.seg&&progressPosition?.offset===point.offset){progressDirty=false;progressPending=false;showProgress();}
+      else if(progressPosition?.seg===point.seg&&progressPosition?.offset===point.offset){progressDirty=!precise&&progressPrecise;progressPending=false;showProgress();}
     }).catch(()=>{if(mode==="text"&&sourceIdentity===id&&generation===searchGeneration){progressDirty=true;showProgress();$("#bookStatus").textContent="Latest place not saved; reopen from the library to retry";}});
   }
   function releaseShelf(){shelfGeneration++;for(const url of shelfUrls)URL.revokeObjectURL(url);shelfUrls=[];clear($("#shelf"));}
