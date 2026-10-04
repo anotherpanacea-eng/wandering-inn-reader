@@ -38,6 +38,8 @@ echo "→ opt-in fuzzy ASR overlap boundary/default-off test"
 "$PYTHON" tests/test_fuzzy_overlap.py
 echo "→ wps-gate threshold-logic test"
 "$PYTHON" tests/test_wps_check.py
+echo "→ numbered input discovery regression (synthetic, no audio/model)"
+"$PYTHON" tests/test_track_selection.py
 echo "→ mandatory Node no-skip gate regression"
 "$PYTHON" tests/test_node_gate.py
 echo "→ draft-first merge-train policy test"

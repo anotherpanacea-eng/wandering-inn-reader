@@ -211,12 +211,39 @@ def render_html(tracks_viz, thr, snippet):
 
 
 def cmd_profile(a):
-    audio_by_no = {track_no(p): p for p in glob.glob(a.audio_glob) if track_no(p)}
-    aligns = {track_no(p): p for p in glob.glob(os.path.join(a.dir, "align*.json")) if track_no(p)}
+    audio_by_no = {}
+    seen = {}
+    for p in glob.glob(a.audio_glob):
+        key = track_no(p)
+        if key is not None:
+            number = int(key)
+            if number in seen:
+                sys.exit(f"ambiguous audio index {number}: {seen[number]} and {p}")
+            seen[number] = p
+            audio_by_no[key] = p
+    aligns = {}
+    seen = {}
+    for p in glob.glob(os.path.join(a.dir, "align*.json")):
+        key = track_no(p)
+        if key is not None:
+            number = int(key)
+            if number in seen:
+                sys.exit(f"ambiguous alignment index {number}: {seen[number]} and {p}")
+            seen[number] = p
+            aligns[key] = p
     # also accept per-CHAPTER outputs (chapNN_*.json) so profile works pre-recombine
     audio_offset = 0
     if not aligns:
-        aligns = {track_no(p): p for p in glob.glob(os.path.join(a.dir, "chap*.json")) if track_no(p)}
+        aligns = {}
+        seen = {}
+        for p in glob.glob(os.path.join(a.dir, "chap*.json")):
+            key = track_no(p)
+            if key is not None:
+                number = int(key)
+                if number in seen:
+                    sys.exit(f"ambiguous chapter index {number}: {seen[number]} and {p}")
+                seen[number] = p
+                aligns[key] = p
         # align_chapters.py emits 0-indexed chapNN_*.json, but the matching per-chapter audio is
         # 1-indexed (chap00 <-> 01.wav/01.mp3). Resolve audio at chap_index + 1 instead of equating
         # filename numbers, else every chapter is skipped as "no audio" -> no windows sampled (Codex P2).
@@ -398,7 +425,10 @@ def cmd_wps_check(a):
     for p in glob.glob(a.audio_glob):
         n = track_no(p)
         if n is not None:
-            audio_by_no[int(n)] = p
+            number = int(n)
+            if number in audio_by_no:
+                sys.exit(f"ambiguous audio track {number}: {audio_by_no[number]} and {p}")
+            audio_by_no[number] = p
     if not audio_by_no:
         sys.exit(f"--audio-glob matched no numbered audio files: {a.audio_glob}")
 
@@ -416,6 +446,8 @@ def cmd_wps_check(a):
         for p in glob.glob(os.path.join(a.dir, "chap*.json")):
             ci = _chapter_index(p)
             if ci is not None:
+                if ci in idx_file:
+                    sys.exit(f"ambiguous chapter index {ci}: {idx_file[ci]} and {p}")
                 idx_file[ci] = p
         for i, e in enumerate(tmap):
             tracks = e.get("tracks") or []
