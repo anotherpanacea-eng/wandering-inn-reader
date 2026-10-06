@@ -897,13 +897,6 @@
       Number.isFinite(r.importedAt) && r.importedAt>=0 && Number.isFinite(r.lastReadAt) && r.lastReadAt>=0 &&
       !validateDoc(r.doc,"saved book");
   }
-  function libraryProgress(r){
-    if(!libraryRecordValid(r))return 0;
-    const at=genericRestoreSeg(r.position&&r.position.seg,r.doc.segments.length);
-    let total=0,before=0;
-    r.doc.segments.forEach((s,i)=>{const n=(s.text.match(/\S+/g)||[]).length;total+=n;if(i<at)before+=n;});
-    return total?Math.min(99,Math.floor(100*before/total)):0;
-  }
   function progressLabel(source,position){
     const restored=progressRestore(source,position),m=progressMeasure(source,restored.point),approx=restored.precise?"":" (approximate)";
     return "Position: "+(m.percent===null?"unavailable":m.percent+"%"+approx)+" · Estimated time left: "+(m.minutes===null?"unavailable":m.minutes+" min at 200 words/min"+approx);
