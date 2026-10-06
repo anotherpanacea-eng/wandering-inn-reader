@@ -256,6 +256,7 @@ one command, no network or device needed. Run it before opening a PR. What it co
   Node is required for a green gate; absence is a failure, not a skip.
 - `node --test tests/test_search.mjs` — the shipped local-search literal matching,
   complete source-span, bounded scan, resumable result-limit, and excerpt suite.
+- `node --test tests/test_annotations.mjs` — local annotation source ranges, malformed-data refusals, monotonic edit/delete IDs, limits and overlap coverage.
 - `python3 tools/run_node_tests.py ...` is the gate wrapper for all Node suites. It
   requests TAP output, preserves the Node exit status, and additionally refuses any
   case reported with `# SKIP`; `tests/test_node_gate.py` plants a skip to prove that

@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8"><title>Local annotation checks</title>
+<h1>Local annotation checks</h1>
+<p>Serve this checkout locally, then open this page. The button loads invented text into the actual reader. Notes remain in this browser's local saved library.</p>
+<button id="seed">Load invented book</button><p id="status" role="status"></p>
+<ol>
+<li>Select text across two paragraphs, open Notes, save a highlight and note. Check the source text stays unchanged and HTML-like notes display as text.</li>
+<li>Add an overlapping highlight and a bookmark. Navigate in scroll and paged modes, including after changing text size.</li>
+<li>Reload and Resume. Edit one note, cancel another edit, and delete a specific item. Check other notes survive.</li>
+<li>Open the reader in another tab. Edit the same note in both tabs: the older edit must be refused and its unsaved text retained. Reload annotations must not silently refresh that editor's revision.</li>
+<li>Delete and reimport the book in the other tab. An old session must require reopening before saving.</li>
+<li>Check Tab stays in Notes, Escape closes it and returns focus, and background reader shortcuts do not run while editing.</li>
+</ol>
+<iframe src="../index.html" title="Actual reader" style="width:100%;height:750px;border:1px solid"></iframe>
+<script>
+const frame=document.querySelector('iframe');
+document.querySelector('#seed').onclick=()=>{try{
+ const input=frame.contentDocument.querySelector('#genericIn'),transfer=new DataTransfer();
+ transfer.items.add(new File(['Opening invented paragraph with a fox 🦊.\n\n'+ 'Invented filler '.repeat(400)+' later bookmark target.\n\nClosing invented paragraph.'],'Annotation practice.txt',{type:'text/plain'}));
+ input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#status').textContent='Invented text submitted. Select text, then choose Notes.';
+}catch(e){document.querySelector('#status').textContent='Open this harness through a local HTTP server for same-origin access.';}};
+</script>

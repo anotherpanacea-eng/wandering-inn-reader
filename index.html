@@ -138,6 +138,9 @@
   .book-info small{display:block;color:var(--dim);font-size:.75rem;}.book-progress{font-size:.8rem;}
   #bookStatus{display:none;padding:2px 14px;font-size:.7rem;color:var(--dim);}
   body:has(#reader.on) #bookStatus:not(:empty){display:block;}
+  .annotation-mark{background:#ffe299;color:#241a00;} .annotation-note{white-space:pre-wrap;}
+  #annotationAvailability{font-size:.75rem;color:var(--dim);text-align:center;}
+  #sheet textarea,#sheet input[type="text"]{width:100%;} #annotationList article{padding:12px 0;border-bottom:1px solid var(--line);}
 </style>
 </head>
 <body>
@@ -172,10 +175,12 @@
   <div id="nowChap"></div>
   <button class="tbtn" id="nextChap" title="Next chapter" aria-label="Next chapter">⏭</button>
   <button class="tbtn" id="searchBtn" title="Search this book" aria-label="Search this book" disabled>Search</button>
+  <button class="tbtn" id="annotationsBtn" aria-label="Notes and annotations" disabled>Notes</button>
   <button class="tbtn" id="settingsBtn" title="Display &amp; timer" aria-label="Settings">Aa</button>
 </header>
 
 <div id="bookStatus" role="status"></div>
+<div id="annotationAvailability" role="status" hidden></div>
 <main id="reader"></main>
 
 <footer id="bar">
@@ -654,13 +659,14 @@
   function setSeg(i){
     if(i===curSeg) return;
     if(curSeg>=0 && segEls[curSeg]){           // collapse previous active sentence back to plain text
-      const p=segEls[curSeg]; p.classList.remove("cur"); p.textContent=segs[curSeg].text;
+      const p=segEls[curSeg]; p.classList.remove("cur"); p.textContent=segs[curSeg].text;if(mode==="text")renderAnnotationSegment(curSeg);
       if(audio.currentTime>=segs[curSeg].end) p.classList.add("read");
     }
     curSeg=i; curWordEls=null; pgFollowWord=-1;
     const p=segEls[i]; if(!p) return;
     const sg=segs[i];
-    if(sg.words && sg.words.length){          // expand current sentence into word spans
+    if(mode==="text")renderAnnotationSegment(i);
+    else if(sg.words && sg.words.length){          // expand current sentence into word spans
       clear(p);
       const f=document.createDocumentFragment();
       sg.words.forEach(w=>{ f.appendChild(el("span",{class:"w", data:{s:String(w.s), e:String(w.e)}, text:w.w+" "})); });
@@ -800,6 +806,54 @@
   }
 
   // LIBRARY_BEGIN
+  // ANNOTATIONS_BEGIN
+  function annotationKeys(x,keys){return !!x&&typeof x==="object"&&!Array.isArray(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));}
+  function annotationBoundary(text,n){return Number.isSafeInteger(n)&&n>=0&&n<=text.length&&!(n>0&&n<text.length&&/[\uD800-\uDBFF]/.test(text[n-1])&&/[\uDC00-\uDFFF]/.test(text[n]));}
+  function annotationPoint(source,p,character=false){return annotationKeys(p,["seg","offset"])&&Number.isSafeInteger(p.seg)&&p.seg>=0&&p.seg<source.length&&annotationBoundary(source[p.seg].text,p.offset)&&(!character||p.offset<source[p.seg].text.length);}
+  function annotationCanonical(source,start,end){
+    if(!annotationPoint(source,start)||!annotationPoint(source,end)||start.seg>end.seg||(start.seg===end.seg&&start.offset>=end.offset))throw new Error("RANGE");
+    let first=null,last=null;
+    for(let i=start.seg;i<=end.seg;i++){const a=i===start.seg?start.offset:0,b=i===end.seg?end.offset:source[i].text.length;if(a<b){first ||= {seg:i,offset:a};last={seg:i,offset:b};}}
+    if(!first)throw new Error("RANGE");return {start:first,end:last};
+  }
+  function annotationSourceEqual(a,b){return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((s,i)=>s.text===b[i].text);}
+  function annotationInstanceValid(x){return typeof x==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(x);}
+  function newAnnotationInstance(){
+    try{const b=new Uint8Array(16);crypto.getRandomValues(b);b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;const h=Array.from(b,n=>n.toString(16).padStart(2,"0")).join("");return h.slice(0,8)+"-"+h.slice(8,12)+"-"+h.slice(12,16)+"-"+h.slice(16,20)+"-"+h.slice(20);}catch(e){return null;}
+  }
+  function annotationText(label,note){
+    if(typeof label!=="string"||typeof note!=="string")throw new Error("DATA");
+    let count=0;for(const cp of label)if(++count>120)throw new Error("LIMIT");if(note.length>8192)throw new Error("LIMIT");
+  }
+  function annotationData(a,source){
+    if(!annotationKeys(a,["version","nextId","items"])||a.version!==1||!Number.isSafeInteger(a.nextId)||a.nextId<1||!Array.isArray(a.items)||a.items.length>1000)throw new Error("DATA");
+    const ids=new Set();
+    for(const item of a.items){
+      const highlight=item?.kind==="highlight";
+      if(!annotationKeys(item,highlight?["id","revision","kind","start","end","label","note"]:["id","revision","kind","start","label","note"])||(!highlight&&item.kind!=="bookmark")||!Number.isSafeInteger(item.id)||item.id<1||item.id>=a.nextId||ids.has(item.id)||!Number.isSafeInteger(item.revision)||item.revision<1||!annotationPoint(source,item.start,true))throw new Error("DATA");
+      ids.add(item.id);annotationText(item.label,item.note);
+      if(highlight){const c=annotationCanonical(source,item.start,item.end);if(c.start.seg!==item.start.seg||c.start.offset!==item.start.offset||c.end.seg!==item.end.seg||c.end.offset!==item.end.offset)throw new Error("DATA");}
+    }return a;
+  }
+  function annotationStored(record){return annotationData(Object.hasOwn(record,"annotations")?record.annotations:{version:1,nextId:1,items:[]},record.doc.segments);}
+  function annotationChange(a,source,op){
+    annotationData(a,source);const next={version:1,nextId:a.nextId,items:a.items.map(x=>({...x,start:{...x.start},...(x.end?{end:{...x.end}}:{})}))};
+    if(op.action==="create"){
+      if(next.items.length>=1000||next.nextId===Number.MAX_SAFE_INTEGER)throw new Error("LIMIT");annotationText(op.label,op.note);
+      const item={id:next.nextId++,revision:1,kind:op.kind,start:{...op.start},label:op.label,note:op.note};
+      if(op.kind==="highlight")Object.assign(item,annotationCanonical(source,op.start,op.end));next.items.push(item);
+    }else{
+      const i=next.items.findIndex(x=>x.id===op.id);if(i<0||next.items[i].revision!==op.revision)throw new Error("CONFLICT");
+      if(op.action==="delete")next.items.splice(i,1);
+      else if(op.action==="edit"){annotationText(op.label,op.note);if(next.items[i].revision===Number.MAX_SAFE_INTEGER)throw new Error("LIMIT");Object.assign(next.items[i],{label:op.label,note:op.note,revision:next.items[i].revision+1});}
+      else throw new Error("DATA");
+    }return annotationData(next,source);
+  }
+  function annotationIntervals(items,seg,length){
+    const out=[];for(const item of items)if(item.kind==="highlight"&&seg>=item.start.seg&&seg<=item.end.seg){const a=seg===item.start.seg?item.start.offset:0,b=seg===item.end.seg?item.end.offset:length;if(a<b)out.push([a,b]);}
+    out.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);const merged=[];for(const r of out){const last=merged.at(-1);if(last&&r[0]<=last[1])last[1]=Math.max(last[1],r[1]);else merged.push(r.slice());}return merged;
+  }
+  // ANNOTATIONS_END
   function libraryRecordValid(r){
     return !!r && r.version===1 && typeof r.identity==="string" && !!r.identity &&
       ["txt","md","epub"].includes(r.format) && typeof r.reimportStable==="boolean" &&
@@ -867,6 +921,7 @@
       });
     }
     const valid=r=>{if(!libraryRecordValid(r))throw new Error("Saved book is unreadable; delete it or import it again");return r;};
+    const lifetime=r=>{if(!Object.hasOwn(r,"annotationInstance")){const id=newAnnotationInstance();if(id)r.annotationInstance=id;}return r;};
     const position=(r,seg)=>({seg:genericRestoreSeg(seg,r.doc.segments.length)});
     return {
       migrate:()=>transaction("readwrite",(tx,read,done)=>read("session","library-migration",mark=>{
@@ -875,7 +930,7 @@
           const session=tx.objectStore("session"),finish=(kind,id)=>{const mark={version:1,kind};session.put(mark,"library-migration");if(!selector&&kind==="text")session.put({kind:"text",identity:id},"resume");else if(!selector&&kind==="audio")session.put({kind:"audio"},"resume");done(mark);};
           if(!legacy||legacy.mode!=="text"||validateDoc(legacy.doc,"legacy")){finish(legacy&&legacy.mode!=="text"&&legacy.doc?"audio":"empty");return;}
           const id=typeof legacy.identity==="string"&&legacy.identity?legacy.identity:"legacy:"+Date.now()+":"+Math.random();
-          read("books",id,old=>{if(!old){const now=Date.now(),r={version:1,identity:id,format:["txt","md","epub"].includes(legacy.format)?legacy.format:"txt",reimportStable:!!legacy.identity&&legacy.reimportStable!==false,doc:legacy.doc,importedAt:now,lastReadAt:now,cover:null};r.position=position(r,readLegacyPosition(id));tx.objectStore("books").put(r);}finish("text",id);});
+          read("books",id,old=>{if(!old){const now=Date.now(),r={version:1,identity:id,format:["txt","md","epub"].includes(legacy.format)?legacy.format:"txt",reimportStable:!!legacy.identity&&legacy.reimportStable!==false,doc:legacy.doc,importedAt:now,lastReadAt:now,cover:null};r.position=position(r,readLegacyPosition(id));lifetime(r);tx.objectStore("books").put(r);}finish("text",id);});
         }));
       })),
       list:()=>transaction("readonly",(tx,read,done)=>{const q=tx.objectStore("books").getAll();q.onsuccess=()=>done(q.result);}),
@@ -883,15 +938,27 @@
       admit:(record,current=()=>true)=>transaction("readwrite",(tx,read,done)=>{
         valid(record);read("books",record.identity,old=>{
           if(!current())return done(null);
-          const now=Date.now(),r={...record,importedAt:old&&libraryRecordValid(old)?old.importedAt:now,lastReadAt:now};
-          r.position=position(r,old&&libraryRecordValid(old)?old.position&&old.position.seg:readLegacyPosition(r.identity));
+          const usable=old&&libraryRecordValid(old),same=usable&&annotationSourceEqual(old.doc.segments,record.doc.segments);
+          if(usable&&Object.hasOwn(old,"annotations")&&!same)throw new Error("Saved annotated text differs; the existing book was kept");
+          const now=Date.now(),r={...record,importedAt:usable?old.importedAt:now,lastReadAt:now};
+          if(same){for(const key of ["annotations","annotationInstance"])if(Object.hasOwn(old,key))r[key]=old[key];}
+          lifetime(r);r.position=position(r,usable?old.position&&old.position.seg:readLegacyPosition(r.identity));
           tx.objectStore("books").put(r);tx.objectStore("session").put({kind:"text",identity:r.identity},"resume");done(r);
         });
       }),
       open:(id,current=()=>true)=>transaction("readwrite",(tx,read,done)=>read("books",id,r=>{
-        if(!r)return done(null);valid(r);if(!current())return done(null);r.lastReadAt=Date.now();r.position=position(r,r.position&&r.position.seg);
+        if(!r)return done(null);valid(r);if(!current())return done(null);lifetime(r);r.lastReadAt=Date.now();r.position=position(r,r.position&&r.position.seg);
         tx.objectStore("books").put(r);tx.objectStore("session").put({kind:"text",identity:id},"resume");done(r);
       })),
+      annotations:(ctx,op=null)=>transaction(op?"readwrite":"readonly",(tx,read,done)=>{
+        if(!ctx.current())throw new Error("STALE");
+        read("books",ctx.identity,r=>{
+          if(!ctx.current()||!r||!annotationInstanceValid(ctx.instance)||r.annotationInstance!==ctx.instance)throw new Error("STALE");
+          valid(r);if(!annotationSourceEqual(r.doc.segments,ctx.source))throw new Error("SOURCE");
+          const data=annotationStored(r);
+          if(op){r.annotations=annotationChange(data,r.doc.segments,op);tx.objectStore("books").put(r);done(r.annotations);}else done(data);
+        });
+      }),
       position:(id,seg)=>transaction("readwrite",(tx,read,done)=>read("books",id,r=>{
         if(!r)return done(false);valid(r);r.position=position(r,seg);r.lastReadAt=Date.now();tx.objectStore("books").put(r);done(true);
       })),
@@ -923,7 +990,7 @@
   let libraryReady=null,librarySaved=false,shelfGeneration=0,shelfUrls=[];
   function ensureLibrary(){if(!libraryReady)libraryReady=library.migrate().catch(e=>{libraryReady=null;throw e;});return libraryReady;}
   function libraryMessage(message){$("#libraryStatus").textContent=message;}
-  function bookSavedStatus(saved,message){librarySaved=saved;$("#bookStatus").textContent=message||(saved?"Saved on this device":"Not saved on this device");}
+  function bookSavedStatus(saved,message){librarySaved=saved;annotationAvailability();$("#bookStatus").textContent=message||(saved?"Saved on this device":"Not saved on this device");}
   function queueLibrary(action){const result=sessionWriteQueue.catch(()=>{}).then(action);sessionWriteQueue=result.catch(()=>{});return result;}
   function saveBookPosition(){
     const id=sourceIdentity,seg=Math.max(0,posSeg());if(!librarySaved)return;
@@ -952,7 +1019,7 @@
         if(valid)info.appendChild(el("p",{class:"book-progress",text:libraryProgress(r)+"% read (approx.)",title:"Approximate reading progress from your saved place"}));
         info.appendChild(el("button",{class:"chip",text:"Delete","data-action":"delete","aria-label":"Delete "+title,onclick:async()=>{
           if(!confirm('Delete "'+title+'" from this device?'))return;
-          try{await queueLibrary(()=>library.remove(r.identity));if(mode==="text"&&sourceIdentity===r.identity)bookSavedStatus(false,"No longer saved on this device");await renderShelf();await checkResume();}
+          try{await queueLibrary(()=>library.remove(r.identity));if(mode==="text"&&sourceIdentity===r.identity){admitSearchDocument();bookSavedStatus(false,"No longer saved on this device");}await renderShelf();await checkResume();}
           catch(e){libraryMessage("Deletion did not complete. Your saved books were kept. "+genericErrorMessage(e.message));}
         }}));
         $("#shelf").appendChild(el("article",{class:"book-card","data-identity":r.identity},[cover,info]));
@@ -964,7 +1031,7 @@
     flushSave();const token=ownedToken===null?++loadEpoch:ownedToken;++loadToken;
     try{await ensureLibrary();const r=await queueLibrary(()=>library.open(id,()=>token===loadEpoch));if(token!==loadEpoch)return;
       if(!r){libraryMessage("That book is no longer saved.");await renderShelf();await checkResume();return;}
-      openTextDoc(r.doc,r.identity,r.format,[],token,true,r.reimportStable,r.position,true);
+      openTextDoc(r.doc,r.identity,r.format,[],token,true,r.reimportStable,r.position,true,r);
     }catch(e){if(token===loadEpoch)libraryMessage("Could not open saved book. "+genericErrorMessage(e.message));}
   }
   $("#libraryBtn").onclick=()=>{
@@ -1360,7 +1427,7 @@
   let searchGeneration=0, searchRun=0, searchOwner=null, searchPlain=-1;
   let searchState={query:"",hits:[],pending:null,cursor:null,busy:false,message:"Enter text to search."};
   function admitSearchDocument(){
-    ++searchGeneration;++searchRun;searchOwner=null;searchPlain=-1;
+    ++searchGeneration;++searchRun;searchOwner=null;searchPlain=-1;resetAnnotations();
     searchState={query:"",hits:[],pending:null,cursor:null,busy:false,message:"Enter text to search."};
     $("#searchBtn").disabled=!segs.length;
     if(sheetKind==="search")closeSheet();
@@ -1455,11 +1522,11 @@
     const hit=owner.hit,p=segEls[hit.seg],rd=$("#reader");
     try{
       if(!p)throw new Error();
-      p.textContent=segs[hit.seg].text;
+      p.textContent=segs[hit.seg].text;if(mode==="text")renderAnnotationSegment(hit.seg);
       if(paged)buildPagesPaged();
       const nodes=segmentTextNodes(p),info=paged?rangeColumn(p,nodes,hit.start):rangeGeometry(p,nodes,hit.start);
       if(!info)throw new Error();
-      if(curSeg>=0&&segEls[curSeg]&&curSeg!==hit.seg){segEls[curSeg].classList.remove("cur");segEls[curSeg].textContent=segs[curSeg].text;}
+      if(curSeg>=0&&segEls[curSeg]&&curSeg!==hit.seg){segEls[curSeg].classList.remove("cur");segEls[curSeg].textContent=segs[curSeg].text;if(mode==="text")renderAnnotationSegment(curSeg);}
       curSeg=hit.seg;curWordEls=null;searchPlain=hit.seg;p.classList.add("cur");p.classList.remove("read");
       readingSeg=hit.seg;setChap(segs[hit.seg].start);
       if(paged){setPage(info.col);goToCol(info.col,false);}
@@ -1495,12 +1562,122 @@
   }
 
 
+  let annotationSession=null,annotationItems=[],annotationProblem="",annotationBusy=false,annotationEditor=null,annotationCapture=null,annotationRefresh=0;
+  function annotationMessage(code){return ({RANGE:"Select only complete book text; selections containing headings or controls are unavailable.",DATA:"Annotations unavailable: saved annotation data is unreadable.",LIMIT:"Not saved: use at most 1000 annotations, 120 label characters and 8192 note units.",CONFLICT:"Not saved: this annotation changed. Reload annotations, then open a new edit. Your unsaved text is kept.",STALE:"Annotations unavailable: reopen this saved book before trying again.",SOURCE:"Annotations unavailable: the saved book text changed. Reopen the book.",STORAGE:"Not saved: storage did not complete. Your unsaved text is kept."})[code]||"Not saved: storage did not complete. Your unsaved text is kept.";}
+  function annotationCurrent(ctx){return !!ctx&&ctx===annotationSession&&ctx.generation===searchGeneration&&mode==="text"&&librarySaved&&ctx.identity===sourceIdentity;}
+  function annotationAvailability(){
+    const reason=mode!=="text"?"Annotations require a saved text-library book.":!librarySaved?"Annotations unavailable: this book is not saved on this device.":!annotationInstanceValid(annotationSession?.instance)?(annotationSession?.instancePresent?"Annotations unavailable: saved annotation data is unreadable.":"Annotations unavailable: reopen with browser random-byte support."):"";
+    $("#annotationsBtn").disabled=!!reason;$("#annotationsBtn").title=reason||"Bookmarks, highlights and notes";
+    const status=$("#annotationAvailability");status.textContent=reason;status.hidden=!reason||!readerReady();return reason;
+  }
+  function resetAnnotations(){
+    ++annotationRefresh;annotationSession=null;annotationItems=[];annotationProblem="";annotationBusy=false;annotationEditor=null;annotationCapture=null;
+    if(sheetKind==="annotations")closeSheet();
+    annotationAvailability();
+  }
+  function bindAnnotations(record){
+    const ctx={identity:sourceIdentity,instance:record?.annotationInstance,instancePresent:!!record&&Object.hasOwn(record,"annotationInstance"),generation:searchGeneration,source:segs};
+    ctx.current=()=>annotationCurrent(ctx);annotationSession=ctx;annotationAvailability();refreshAnnotations();
+  }
+  function renderAnnotationSegment(i){
+    const p=segEls[i];if(!p||mode!=="text")return;
+    const text=segs[i].text,intervals=annotationIntervals(annotationItems,i,text.length);clear(p);let at=0;
+    for(const [a,b] of intervals){if(at<a)p.appendChild(document.createTextNode(text.slice(at,a)));p.appendChild(el("mark",{class:"annotation-mark",text:text.slice(a,b)}));at=b;}
+    if(at<text.length||!text.length)p.appendChild(document.createTextNode(text.slice(at)));
+  }
+  function renderAnnotationMarks(){if(mode==="text")for(let i=0;i<segs.length;i++)renderAnnotationSegment(i);}
+  async function refreshAnnotations(){
+    const ctx=annotationSession,run=++annotationRefresh;if(!annotationCurrent(ctx)||!annotationInstanceValid(ctx.instance))return;
+    try{const data=await library.annotations(ctx);if(!annotationCurrent(ctx)||run!==annotationRefresh)return;const changed=JSON.stringify(data.items)!==JSON.stringify(annotationItems);annotationItems=data.items;annotationProblem="";if(changed)renderAnnotationMarks();}
+    catch(e){if(!annotationCurrent(ctx)||run!==annotationRefresh)return;annotationProblem=annotationMessage(e.message);if(["DATA","STALE","SOURCE"].includes(e.message)){annotationItems=[];renderAnnotationMarks();}}
+    if(sheetKind==="annotations"&&!annotationEditor)renderAnnotations();
+  }
+  function annotationSelected(){
+    const selection=getSelection();if(!selection||!selection.rangeCount||selection.isCollapsed)return null;
+    const range=selection.getRangeAt(0),rd=$("#reader");if(!rd.contains(range.startContainer)||!rd.contains(range.endContainer))throw new Error("RANGE");
+    const selected=[];
+    for(let i=0;i<segs.length;i++){
+      const p=segEls[i];if(!range.intersectsNode(p))continue;const nodes=segmentTextNodes(p);
+      if(nodes.map(n=>n.nodeValue).join("")!==segs[i].text)throw new Error("RANGE");
+      let base=0;
+      for(const n of nodes){
+        if(range.comparePoint(n,0)===1||range.comparePoint(n,n.nodeValue.length)===-1){base+=n.nodeValue.length;continue;}
+        const a=range.startContainer===n?range.startOffset:0,b=range.endContainer===n?range.endOffset:n.nodeValue.length;
+        if(a<b)selected.push({seg:i,start:base+a,end:base+b,text:n.nodeValue.slice(a,b)});base+=n.nodeValue.length;
+      }
+    }
+    if(!selected.length||selected.map(x=>x.text).join("")!==range.toString())throw new Error("RANGE");
+    const first=selected[0],last=selected.at(-1);return annotationCanonical(segs,{seg:first.seg,offset:first.start},{seg:last.seg,offset:last.end});
+  }
+  function annotationVisiblePoint(){
+    const anchor=comfortAnchor();if(!anchor||!["text","scrollText"].includes(anchor.kind))throw new Error("RANGE");
+    const text=segs[anchor.i]?.text;if(typeof text!=="string")throw new Error("RANGE");let offset=anchor.offset;
+    if(!annotationBoundary(text,offset))offset--;const point={seg:anchor.i,offset};if(!annotationPoint(segs,point,true))throw new Error("RANGE");
+    const nodes=segmentTextNodes(segEls[point.seg]);if(nodes.map(n=>n.nodeValue).join("")!==text)throw new Error("RANGE");
+    const info=rangeGeometry(segEls[point.seg],nodes,offset),r=$("#reader").getBoundingClientRect();
+    if(!info||info.rect.bottom<=r.top||info.rect.top>=r.bottom||info.rect.right<=r.left||info.rect.left>=r.right)throw new Error("RANGE");return point;
+  }
+  function captureAnnotations(){
+    try{const range=annotationSelected();return {ctx:annotationSession,range,point:range?range.start:annotationVisiblePoint(),error:""};}
+    catch(e){return {ctx:annotationSession,range:null,point:null,error:annotationMessage("RANGE")};}
+  }
+  function annotationExcerpt(item){let out="",room=120;for(let i=item.start.seg;i<segs.length&&room>0;i++){if(item.kind==="highlight"&&i>item.end.seg)break;const end=item.kind==="highlight"?(i>item.end.seg?0:i===item.end.seg?item.end.offset:segs[i].text.length):segs[i].text.length;if(i>item.start.seg&&item.kind!=="highlight")break;for(const cp of segs[i].text.slice(i===item.start.seg?item.start.offset:0,end)){if(!room--)break;out+=cp;}}return out;}
+  function annotationForm(kind,item=null,focusNote=false){
+    const ctx=annotationSession,capture=annotationCapture;
+    if(annotationBusy||annotationProblem||!annotationCurrent(ctx))return;
+    if(!item&&(capture?.ctx!==ctx||capture?.error||!capture?.point||(kind==="highlight"&&!capture.range))){annotationProblem=capture?.error||"Select book text before choosing Highlight.";renderAnnotations();return;}
+    annotationEditor={ctx,op:item?{action:"edit",id:item.id,revision:item.revision}:{action:"create",kind,start:kind==="highlight"?capture.range.start:capture.point,...(kind==="highlight"?{end:capture.range.end}:{})},label:item?.label||"",note:item?.note||""};renderAnnotations();$(focusNote?"#annotationNote":"#annotationLabel").focus();
+  }
+  function annotationStatus(message){const status=$("#annotationStatus");if(status)status.textContent=message;}
+  async function mutateAnnotation(op,editor=null){
+    const ctx=editor?.ctx||annotationSession;if(annotationBusy||!annotationCurrent(ctx)){annotationStatus(annotationMessage("STALE"));return;}
+    annotationBusy=true;for(const n of $("#sheet").querySelectorAll("#annotationLabel,#annotationNote"))n.disabled=true;$("#annotationSave")?.setAttribute("disabled","");for(const n of $("#sheet").querySelectorAll("[data-annotation-action]"))n.disabled=true;annotationStatus("Saving…");
+    try{const data=await queueLibrary(()=>library.annotations(ctx,op));if(!annotationCurrent(ctx))return;annotationItems=data.items;annotationProblem="";annotationEditor=null;renderAnnotationMarks();if(sheetKind==="annotations"){renderAnnotations();annotationStatus("Saved on this device.");}}
+    catch(e){if(annotationCurrent(ctx)){if(editor){editor.label=$("#annotationLabel")?.value??editor.label;editor.note=$("#annotationNote")?.value??editor.note;}annotationStatus(annotationMessage(e.message));}}
+    finally{if(annotationCurrent(ctx)){annotationBusy=false;for(const n of $("#sheet").querySelectorAll("#annotationLabel,#annotationNote"))n.disabled=false;$("#annotationSave")?.removeAttribute("disabled");for(const n of $("#sheet").querySelectorAll("[data-annotation-action]"))n.disabled=false;if(sheetKind==="annotations"&&!annotationEditor)$("#annotationBookmark")?.focus();}}
+  }
+  async function navigateAnnotation(item){
+    const ctx=annotationSession;if(!annotationCurrent(ctx))return;
+    try{const latest=await library.annotations(ctx);if(!annotationCurrent(ctx))return;const fresh=latest.items.find(x=>x.id===item.id&&x.revision===item.revision);if(!fresh)throw new Error("CONFLICT");
+      annotationItems=latest.items;renderAnnotationMarks();const p=segEls[fresh.start.seg],nodes=segmentTextNodes(p);if(paged)buildPagesPaged();const info=paged?rangeColumn(p,nodes,fresh.start.offset):rangeGeometry(p,nodes,fresh.start.offset);if(!info)throw new Error("GEOMETRY");
+      closeSheet();cancelSearchNavigation();curSeg=fresh.start.seg;readingSeg=curSeg;curWordEls=null;for(const e of segEls)e.classList.remove("cur");p.classList.add("cur");setChap(segs[curSeg].start);
+      const rd=$("#reader");if(paged){setPage(info.col);goToCol(info.col,false);}else{const old=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-12;rd.style.scrollBehavior=old;setPage(pageOf(curSeg));}save(true);
+    }catch(e){if(annotationCurrent(ctx))annotationStatus(e.message==="GEOMETRY"?"Unable to show this annotation.":annotationMessage(e.message));}
+  }
+  function renderAnnotations(){
+    const sheet=$("#sheet");clear(sheet);sheet.setAttribute("role","dialog");sheet.setAttribute("aria-modal","true");sheet.setAttribute("aria-labelledby","annotationHeading");sheet.appendChild(el("h2",{id:"annotationHeading",text:"Bookmarks, highlights and notes"}));
+    sheet.appendChild(el("p",{id:"annotationStatus",role:"status","aria-live":"polite",text:annotationProblem||"Annotations are saved only on this device."}));
+    const editor=annotationEditor;
+    if(editor){
+      const label=el("input",{id:"annotationLabel",type:"text",autocomplete:"off"}),note=el("textarea",{id:"annotationNote",rows:"5"});label.value=editor.label;note.value=editor.note;
+      label.oninput=()=>editor.label=label.value;note.oninput=()=>editor.note=note.value;
+      const form=el("form",{},[el("label",{for:"annotationLabel",text:"Label (optional)"}),label,el("label",{for:"annotationNote",text:"Note (optional)"}),note,el("button",{id:"annotationSave",type:"submit",text:"Save"}),el("button",{type:"button",text:"Cancel",onclick:()=>{if(annotationBusy)return;annotationEditor=null;renderAnnotations();}})]);
+      form.onsubmit=e=>{e.preventDefault();editor.label=label.value;editor.note=note.value;mutateAnnotation({...editor.op,label:label.value,note:note.value},editor);};sheet.appendChild(form);
+    }else{
+      for(const [label,kind,id] of [["Add bookmark","bookmark","annotationBookmark"],["Highlight selection","highlight","annotationHighlight"],["Highlight + note","highlight","annotationHighlightNote"]]){const b=el("button",{type:"button",id,text:label,"data-annotation-action":"create",onclick:()=>annotationForm(kind,null,id==="annotationHighlightNote")});b.disabled=!!annotationProblem||annotationBusy;sheet.appendChild(b);}
+      if(!annotationItems.length)sheet.appendChild(el("p",{text:"No annotations in this book."}));
+      const list=el("div",{id:"annotationList",class:"clist"});
+      for(const item of annotationItems){const row=el("article",{data:{annotationId:String(item.id)}},[el("p",{text:(item.label||item.kind)+" · Segment "+(item.start.seg+1)}),el("blockquote",{text:annotationExcerpt(item)}),el("p",{class:"annotation-note",text:item.note})]);
+        for(const [label,action] of [["Navigate",()=>navigateAnnotation(item)],["Edit",()=>annotationForm(item.kind,item)],["Delete",()=>{if(confirm('Delete '+(item.label||item.kind)+' annotation #'+item.id+'?'))mutateAnnotation({action:"delete",id:item.id,revision:item.revision});}]])row.appendChild(el("button",{type:"button",text:label,"aria-label":label+" "+(item.label||item.kind)+" annotation "+item.id,"data-annotation-action":label,onclick:action}));list.appendChild(row);
+      }sheet.appendChild(list);
+    }
+    sheet.appendChild(el("button",{type:"button",id:"annotationReload",text:"Reload annotations",onclick:()=>refreshAnnotations()}));
+    sheet.appendChild(el("button",{type:"button",id:"annotationClose",text:editor?"Cancel and close":"Close",onclick:()=>{if(!annotationBusy)closeSheet();}}));
+  }
+  function annotationSheetKey(e){
+    if(sheetKind!=="annotations")return false;
+    if(e.key==="Escape"){e.preventDefault();if(!annotationBusy)closeSheet();}
+    else if(e.key==="Tab"){const controls=Array.from($("#sheet").querySelectorAll("input,textarea,button")).filter(x=>!x.disabled),first=controls[0],last=controls.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}return true;
+  }
+  $("#annotationsBtn").addEventListener("pointerdown",()=>{annotationCapture=captureAnnotations();});
+  $("#annotationsBtn").onclick=()=>{annotationCapture ||= captureAnnotations();openSheet("annotations");refreshAnnotations();};
+  window.addEventListener("focus",()=>{if(annotationSession)refreshAnnotations();});
   // ---------- bottom sheet ----------
   function openSheet(kind){ if(sheetKind==="search")cancelSearchScan();if(kind==="settings") comfortSessionAnchor=null; sheetKind=kind;
-    if(kind!=="search"){for(const key of ["role","aria-modal","aria-labelledby"])$("#sheet").removeAttribute(key);}
-    (kind==="search"?renderSearch:kind==="chapters"?renderChapters:renderSettings)();
-    $("#scrim").classList.add("on"); $("#sheet").classList.add("on");if(kind==="search")$("#searchQuery").focus(); }
-  function closeSheet(){ const search=sheetKind==="search";if(search)cancelSearchScan();comfortSessionAnchor=null; sheetKind=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on");if(search)$("#searchBtn").focus(); }
+    if(kind!=="search"&&kind!=="annotations"){for(const key of ["role","aria-modal","aria-labelledby"])$("#sheet").removeAttribute(key);}
+    (kind==="annotations"?renderAnnotations:kind==="search"?renderSearch:kind==="chapters"?renderChapters:renderSettings)();
+    $("#scrim").classList.add("on"); $("#sheet").classList.add("on");if(kind==="search")$("#searchQuery").focus();if(kind==="annotations")$("#annotationBookmark,#annotationLabel,#annotationClose")?.focus(); }
+  function closeSheet(){if(sheetKind==="annotations"&&annotationBusy)return; const annotations=sheetKind==="annotations";const search=sheetKind==="search";if(search)cancelSearchScan();comfortSessionAnchor=null; sheetKind=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on");if(search)$("#searchBtn").focus();if(annotations){annotationEditor=null;annotationCapture=null;$("#annotationsBtn").focus();} }
   $("#searchBtn").onclick=()=>{if(segs.length)openSheet("search");};
   $("#scrim").onclick=closeSheet;
   $("#chaptersBtn").onclick=()=>openSheet("chapters");
@@ -1561,7 +1738,7 @@
 
   // ---------- keyboard (desktop) ----------
   document.addEventListener("keydown",e=>{
-    if(searchSheetKey(e))return;
+    if(searchSheetKey(e)||annotationSheetKey(e))return;
     if(!$("#reader").classList.contains("on")) return;
     const tag=(e.target.tagName||"").toLowerCase();
     if(tag==="input"||tag==="textarea") return;
@@ -1698,12 +1875,13 @@
 
   function clearMediaSession(){if(!("mediaSession" in navigator))return;for(const a of ["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"])try{navigator.mediaSession.setActionHandler(a,null);}catch(e){}try{navigator.mediaSession.setPositionState();}catch(e){}try{navigator.mediaSession.playbackState="none";}catch(e){}try{navigator.mediaSession.metadata=null;}catch(e){}}
   function teardownAudioForText(){++loadToken;pendingSeek=0;pendingAutoplay=false;sleepMode="off";sleepAt=0;sleepChapterEnd=Infinity;cancelAnimationFrame(rafId);rafId=null;audio.pause();releaseWake();clearMediaSession();if(curObjUrl){URL.revokeObjectURL(curObjUrl);curObjUrl=null;}if(singleAudioObjUrl){URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=null;}audio.removeAttribute("src");try{audio.load();}catch(e){}haveAudio=false;haveSync=false;$("#audioCk").textContent="○";$("#syncCk").textContent="○";$("#startBtn").style.display="none";}
-  function openTextDoc(nextDoc,identity,format,warnings,token,restored,identityStable=true,position=null,saved=false){
+  function openTextDoc(nextDoc,identity,format,warnings,token,restored,identityStable=true,position=null,saved=false,annotationRecord=null){
     const committed=commitGenericDoc(nextDoc,"generic "+format,token,()=>loadEpoch,()=>{
       mode="text";sourceIdentity=identity;sourceIdentityStable=identityStable;currentFormat=format;positionReady=false;
       playlist=null;dbxBook=null;isDemo=false;pendingAudioFile=null;teardownAudioForText();doc=nextDoc;
       curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();admitSearchDocument();bookSavedStatus(saved);showReaderUI();
       navigateTextSeg(genericRestoreSeg(position?.seg,segs.length),false,false);positionReady=true;lastSave=0;
+      if(saved)bindAnnotations(annotationRecord);
       bookSavedStatus(saved);
     });
     if(!committed)return false;
@@ -1721,7 +1899,7 @@
       let record=null;
       try{await ensureLibrary();current();const now=Date.now();record=await queueLibrary(()=>library.admit({version:1,identity:identity.identity,format:result.format,reimportStable:identity.stable,doc:result.doc,cover:result.cover,importedAt:now,lastReadAt:now,position:{seg:0}},()=>token===loadEpoch));}
       catch(err){current();libraryMessage("Import not saved. Existing books were kept. "+genericErrorMessage(err.message));}
-      current();openTextDoc(result.doc,identity.identity,result.format,result.warnings,token,false,identity.stable,record?.position||{seg:legacyPosition(identity.identity)},!!record);
+      current();openTextDoc(result.doc,identity.identity,result.format,result.warnings,token,false,identity.stable,record?.position||{seg:legacyPosition(identity.identity)},!!record,record);
     }catch(err){if(token===loadEpoch)alert("This file can't be opened ("+((err&&err.code)||"IMPORT")+"):\n\n"+genericErrorMessage(err?.message||err));}
     finally{if(token===loadEpoch){small.textContent=".txt, .md, .markdown, or EPUB 3";e.target.value="";}}
   });
