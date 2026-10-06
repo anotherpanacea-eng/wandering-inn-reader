@@ -32,6 +32,9 @@ echo "→ byte-compile pipeline + tools + tests"
 echo "→ align.py data-contract test"
 "$PYTHON" tests/test_align.py
 
+echo "→ track splitter sentence/word timing contract test"
+"$PYTHON" tests/test_split_tracks.py
+
 echo "→ edit-aware aligner cut-detection / gap-emit test (synthetic, no GPU)"
 "$PYTHON" tests/test_editaware.py
 echo "→ opt-in fuzzy ASR overlap boundary/default-off test"
