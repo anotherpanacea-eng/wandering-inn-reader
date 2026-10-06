@@ -65,6 +65,31 @@ def build_parser():
 def main(argv=None):
     a = build_parser().parse_args(argv)
 
+    # Validate active ASR rosters before the optional WPS pass can read durations.
+    # WPS-only retains its own selected extraction mode and fallback behavior.
+    audio_by_no, aligns = {}, {}
+    if not a.wps_only and a.dir and a.audio_glob:
+        audio_by_no = {}
+        seen = {}
+        for p in glob.glob(a.audio_glob):
+            key = track_no(p)
+            if key is not None:
+                number = int(key)
+                if number in seen:
+                    sys.exit(f"ambiguous audio index {number}: {seen[number]} and {p}")
+                seen[number] = p
+                audio_by_no[key] = p
+        aligns = {}
+        seen = {}
+        for p in glob.glob(os.path.join(a.dir, "align*.json")):
+            key = track_no(p)
+            if key is not None:
+                number = int(key)
+                if number in seen:
+                    sys.exit(f"ambiguous alignment index {number}: {seen[number]} and {p}")
+                seen[number] = p
+                aligns[key] = p
+
     # --- wps pre-screen: a NO-GPU CPU pass that runs BEFORE any torch import / model load. A wps outlier
     # is the wrong-boundary signature the sparse ASR gate is structurally blind to, so in the SHIP gate it
     # is HARD: exit nonzero here and SKIP the GPU pass entirely, unless --allow-wps-outliers waives it.
@@ -85,8 +110,6 @@ def main(argv=None):
 
     import numpy as np, soundfile as sf, torch, torchaudio
 
-    audio_by_no = {track_no(p): p for p in glob.glob(a.audio_glob) if track_no(p)}
-    aligns = {track_no(p): p for p in glob.glob(os.path.join(a.dir, "align*.json")) if track_no(p)}
     if not aligns:
         sys.exit(f"no alignNN.json in {a.dir}")
     avail = sorted(aligns)

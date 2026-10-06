@@ -146,6 +146,8 @@ def main():
     for p in glob.glob(a.audio_glob):
         n = track_no(p)
         if n is not None:
+            if n in by_no:
+                sys.exit(f"ambiguous audio track {n}: {by_no[n]} and {p}")
             by_no[n] = p
     for e in tmap:
         for t in e["tracks"]:
