@@ -1403,7 +1403,7 @@
     }
     sheet.appendChild(list);
     if(searchState.cursor && (!searchState.cursor.done||searchState.pending) && searchState.hits.length<500){
-      const more=el("button",{type:"button",id:"searchMore",text:"Load more"});more.disabled=searchState.busy;more.onclick=()=>continueSearch();sheet.appendChild(more);
+      const more=el("button",{type:"button",id:"searchMore",text:"Load more"});more.onclick=()=>continueSearch();sheet.appendChild(more);
     }
     sheet.appendChild(el("button",{type:"button",id:"searchClose",text:"Close",onclick:closeSheet}));
   }
@@ -1464,7 +1464,9 @@
       readingSeg=hit.seg;setChap(segs[hit.seg].start);
       if(paged){setPage(info.col);goToCol(info.col,false);}
       else{const old=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-12;rd.style.scrollBehavior=old;setPage(pageOf(hit.seg));}
-      pausedAt=Date.now();lastUserInput=0;owner.complete=true;save(true);
+      pausedAt=Date.now();lastUserInput=0;owner.complete=true;
+      if(mode!=="text"){const t=audio.currentTime;$("#cur").textContent=fmt(t);$("#seek").value=audio.duration?t/audio.duration*1000:0;updatePosition();}
+      save(true);
     }catch(e){searchOwner=null;toast("Unable to show this match");}
   }
   function navigateSearchHit(hit){
