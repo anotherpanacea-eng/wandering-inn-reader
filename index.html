@@ -180,6 +180,8 @@
 </header>
 
 <div id="bookStatus" role="status"></div>
+<div id="progressStatus" role="status" style="padding:2px 14px;font-size:.75rem"></div>
+<button id="finishBook" type="button" class="chip" hidden>Finish book</button>
 <div id="annotationAvailability" role="status" hidden></div>
 <main id="reader"></main>
 
@@ -478,12 +480,12 @@
     if(readerWired) return; readerWired=true;
     const r=$("#reader");
     r.addEventListener("scroll",onReaderScroll,{passive:true});
-    r.addEventListener("wheel",()=>{ comfortSessionAnchor=null; lastUserInput=Date.now(); },{passive:true});
-    r.addEventListener("pointerdown",()=>{ comfortSessionAnchor=null; lastUserInput=Date.now(); },{passive:true});
+    r.addEventListener("wheel",()=>{ comfortSessionAnchor=null; lastUserInput=Date.now(); if(mode==="text")progressGesture=true; },{passive:true});
+    r.addEventListener("pointerdown",()=>{ comfortSessionAnchor=null; lastUserInput=Date.now(); if(mode==="text")progressGesture=true; },{passive:true});
     r.addEventListener("click",onTap);
     let tsx=0,tsy=0,tst=0;
     r.addEventListener("touchstart",e=>{ const t=e.changedTouches[0]; tsx=t.clientX; tsy=t.clientY;
-      tst=Date.now(); comfortSessionAnchor=null; lastUserInput=tst; },{passive:true});
+      tst=Date.now(); comfortSessionAnchor=null; lastUserInput=tst;if(mode==="text")progressGesture=true; },{passive:true});
     r.addEventListener("touchend",e=>{ const t=e.changedTouches[0], dx=t.clientX-tsx, dy=t.clientY-tsy;
       if(Date.now()-tst<600 && Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.6) turnPage(dx<0?1:-1); },{passive:true});
   }
@@ -575,7 +577,8 @@
     return Math.max(0, Math.min(pages.length-1, colFromContentX(x, pageW)));
   }
   function relayoutPaged(){                          // re-measure + keep the current place on screen
-    if(!(paged && readerReady())) return;
+    if(!readerReady()) return;
+    if(mode==="text"&&progressPosition){if(progressGesture){clearTimeout(scrollT);scrollT=0;captureProgress();}progressGesture=false;progressUnavailable=!placeProgress(progressPosition);showProgress();return;}
     const a=comfortAnchor(); restoreComfortAnchor(a);
   }
   function setMode(m){ comfortSessionAnchor=null;
@@ -587,6 +590,7 @@
     if(paged){ buildPagesPaged(); const pg=pageOf(i); setPage(pg); goToCol(pg,false); }
     else { buildPages(); const pg=pageOf(i); setPage(pg);
       const el=segEls[pages[pg].seg]; if(el) rd.scrollTo({top:Math.max(0,el.offsetTop-12)}); }
+    if(mode==="text"&&progressPosition){progressGesture=false;progressUnavailable=!placeProgress(progressPosition);showProgress();}
     if(sheetKind==="settings") renderSettings();
   }
   function segAtAnchor(){   // the segment crossing a line ~1/4 down the reader = what you're reading
@@ -598,9 +602,12 @@
   function onReaderScroll(){
     userScrollPause=Date.now()+2500;        // suspend playback auto-follow briefly (unchanged)
     if(mode!=="text"&&!audio.paused) return;               // only text / paused reader feeds the cursor
+    if(mode==="text"&&!progressGesture)return;
     clearTimeout(scrollT); scrollT=setTimeout(captureReadingPos,160);
   }
   function captureReadingPos(){
+    scrollT=0;
+    if(mode==="text"){if(progressGesture&&$("#reader").classList.contains("on")){progressGesture=false;captureProgress();}return;}
     if(paged || !$("#reader").classList.contains("on")) return; // paged mode: the reading place comes from turnPage, not vertical scroll
     // capture only on a real reader gesture made *after* the pause — so neither the cold-open
     // restore scroll nor a follow/seek scroll still settling from before the pause can hijack it.
@@ -614,13 +621,13 @@
     lastUserInput=Date.now();
     const target=Math.max(0,Math.min(pages.length-1,(curPage<0?0:curPage)+dir));
     if(paged){                                       // slide horizontally to the target column
-      goToCol(target,true);
-      if(mode==="text"||audio.paused){ readingSeg=pageSeg[target]; save(); }
+      goToCol(target,mode!=="text");
+      if(mode==="text"){setPage(target);progressGesture=false;captureProgress();}else if(audio.paused){ readingSeg=pageSeg[target]; save(); }
       setPage(target); return;
     }
     const el=segEls[pages[target].seg]; if(!el) return;
-    $("#reader").scrollTo({top:Math.max(0,el.offsetTop-12), behavior:"smooth"});
-    if(mode==="text"||audio.paused){ readingSeg=pages[target].seg; save(); }
+    $("#reader").scrollTo({top:Math.max(0,el.offsetTop-12), behavior:mode==="text"?"instant":"smooth"});
+    if(mode==="text"){progressGesture=false;captureProgress();}else if(audio.paused){ readingSeg=pages[target].seg; save(); }
     setPage(target);
   }
 
@@ -641,7 +648,7 @@
     if(mode!=="text"||!segs.length) return; i=Math.max(0,Math.min(segs.length-1,Number.isInteger(i)?i:0));
     readingSeg=i; curSeg=-1; setSeg(i); setChap(segs[i].start); const p=pageOf(i); setPage(p);
     if(paged) goToCol(p,!!smooth); else {const e=segEls[i];if(e){const reader=$("#reader"),behavior=reader.style.scrollBehavior;if(!smooth)reader.style.scrollBehavior="auto";reader.scrollTo({top:Math.max(0,e.offsetTop-12),behavior:smooth?"smooth":"instant"});reader.style.scrollBehavior=behavior;}}
-    if(doSave) save(true);
+    if(doSave){if(mode==="text"){progressGesture=false;retainProgress({seg:i,offset:0});}save(true);}
   }
 
   // ---------- highlight ----------
@@ -854,6 +861,36 @@
     out.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);const merged=[];for(const r of out){const last=merged.at(-1);if(last&&r[0]<=last[1])last[1]=Math.max(last[1],r[1]);else merged.push(r.slice());}return merged;
   }
   // ANNOTATIONS_END
+  // PROGRESS_BEGIN
+  function progressEnd(source){for(let i=source.length-1;i>=0;i--)if(source[i].text.length)return {seg:i,offset:source[i].text.length};return null;}
+  function progressPoint(source,p){return annotationPoint(source,p);}
+  function progressRestore(source,position){
+    const seg=genericRestoreSeg(position?.seg,source.length),precise=!!position&&Number.isSafeInteger(position.seg)&&position.seg===seg&&progressPoint(source,{seg,offset:position.offset});
+    return {point:{seg,offset:precise?position.offset:0},precise};
+  }
+  // Source arrays are immutable within one admitted document generation. Keep
+  // derived totals in memory only; a new source array receives its own index.
+  const progressIndexes=new WeakMap();
+  function progressIndex(source){
+    let index=progressIndexes.get(source);if(index)return index;
+    const points=[0],words=[0];
+    for(const segment of source){
+      let count=0;for(const cp of segment.text)count++;
+      points.push(points.at(-1)+count);
+      words.push(words.at(-1)+(segment.text.match(/\S+/gu)||[]).length);
+    }
+    index={points,words,end:progressEnd(source)};progressIndexes.set(source,index);return index;
+  }
+  function progressMeasure(source,p){
+    if(!progressPoint(source,p))throw new Error("POSITION");
+    const index=progressIndex(source),text=source[p.seg].text;
+    let before=index.points[p.seg],remaining=index.words.at(-1)-index.words[p.seg+1];
+    for(const cp of text.slice(0,p.offset))before++;
+    for(const word of text.matchAll(/\S+/gu))if(word.index+word[0].length>p.offset)remaining++;
+    const total=index.points.at(-1),end=index.end,finished=!!end&&p.seg===end.seg&&p.offset===end.offset;
+    return {percent:total?Math.floor(100*before/total):null,minutes:finished?0:index.words.at(-1)?Math.ceil(remaining/200):null,finished,total};
+  }
+  // PROGRESS_END
   function libraryRecordValid(r){
     return !!r && r.version===1 && typeof r.identity==="string" && !!r.identity &&
       ["txt","md","epub"].includes(r.format) && typeof r.reimportStable==="boolean" &&
@@ -866,6 +903,10 @@
     let total=0,before=0;
     r.doc.segments.forEach((s,i)=>{const n=(s.text.match(/\S+/g)||[]).length;total+=n;if(i<at)before+=n;});
     return total?Math.min(99,Math.floor(100*before/total)):0;
+  }
+  function progressLabel(source,position){
+    const restored=progressRestore(source,position),m=progressMeasure(source,restored.point),approx=restored.precise?"":" (approximate)";
+    return "Position: "+(m.percent===null?"unavailable":m.percent+"%"+approx)+" · Estimated time left: "+(m.minutes===null?"unavailable":m.minutes+" min at 200 words/min"+approx);
   }
   // Header bounds precede browser decoding; unsupported variants simply have no cover.
   function coverHeader(input,media){
@@ -942,12 +983,12 @@
           if(usable&&Object.hasOwn(old,"annotations")&&!same)throw new Error("Saved annotated text differs; the existing book was kept");
           const now=Date.now(),r={...record,importedAt:usable?old.importedAt:now,lastReadAt:now};
           if(same){for(const key of ["annotations","annotationInstance"])if(Object.hasOwn(old,key))r[key]=old[key];}
-          lifetime(r);r.position=position(r,usable?old.position&&old.position.seg:readLegacyPosition(r.identity));
+          lifetime(r);r.position=same&&old.position&&typeof old.position==="object"?{...old.position}:position(r,usable?old.position&&old.position.seg:readLegacyPosition(r.identity));
           tx.objectStore("books").put(r);tx.objectStore("session").put({kind:"text",identity:r.identity},"resume");done(r);
         });
       }),
       open:(id,current=()=>true)=>transaction("readwrite",(tx,read,done)=>read("books",id,r=>{
-        if(!r)return done(null);valid(r);if(!current())return done(null);lifetime(r);r.lastReadAt=Date.now();r.position=position(r,r.position&&r.position.seg);
+        if(!r)return done(null);valid(r);if(!current())return done(null);lifetime(r);r.lastReadAt=Date.now();if(!r.position||typeof r.position!=="object")r.position=position(r,r.position&&r.position.seg);
         tx.objectStore("books").put(r);tx.objectStore("session").put({kind:"text",identity:id},"resume");done(r);
       })),
       annotations:(ctx,op=null)=>transaction(op?"readwrite":"readonly",(tx,read,done)=>{
@@ -959,9 +1000,18 @@
           if(op){r.annotations=annotationChange(data,r.doc.segments,op);tx.objectStore("books").put(r);done(r.annotations);}else done(data);
         });
       }),
-      position:(id,seg)=>transaction("readwrite",(tx,read,done)=>read("books",id,r=>{
-        if(!r)return done(false);valid(r);r.position=position(r,seg);r.lastReadAt=Date.now();tx.objectStore("books").put(r);done(true);
-      })),
+      position:(id,value,ctx=null)=>transaction("readwrite",(tx,read,done)=>{
+        if(ctx&&!ctx.current())throw new Error("STALE");
+        read("books",id,r=>{
+          if(!r)return done(false);valid(r);
+          if(ctx){if(!ctx.current()||!annotationInstanceValid(ctx.instance)||r.annotationInstance!==ctx.instance)throw new Error("STALE");if(!annotationSourceEqual(r.doc.segments,ctx.source))throw new Error("SOURCE");}
+          if(value&&typeof value==="object"){
+            if(!ctx||!progressPoint(r.doc.segments,value))throw new Error("POSITION");
+            r.position={...r.position,seg:value.seg,offset:value.offset};
+          }else{r.position={...r.position,...position(r,value)};delete r.position.offset;}
+          r.lastReadAt=Date.now();tx.objectStore("books").put(r);done(true);
+        });
+      }),
       remove:id=>transaction("readwrite",(tx,read,done)=>{
         tx.objectStore("books").delete(id);read("session","resume",r=>{if(r&&r.kind==="text"&&r.identity===id)tx.objectStore("session").delete("resume");done(true);});
       }),
@@ -973,6 +1023,30 @@
     };
   }
   // LIBRARY_END
+  let progressPosition=null,progressPrecise=false,progressUnavailable=false,progressDirty=false,progressGesture=false,progressPending=false;
+  function showProgress(){
+    const text=mode==="text"&&readerReady();$("#progressStatus").hidden=!text;$("#finishBook").hidden=!text||!progressEnd(segs);
+    if(!text)return;
+    $("#progressStatus").textContent=progressLabel(segs,progressPrecise?progressPosition:{seg:progressPosition?.seg})+(progressUnavailable?" · Position unavailable for this view":"")+(progressDirty?" · Latest position not saved":"")+(!annotationInstanceValid(annotationSession?.instance)?" · Precise position cannot be saved on this device":"");
+  }
+  function retainProgress(point,precise=true,intent=true){progressPending=intent;progressPosition={...point};progressPrecise=precise;progressUnavailable=false;readingSeg=point.seg;showProgress();}
+  function progressCharacter(point){
+    const text=segs[point.seg]?.text;if(!text)return null;let offset=point.offset;
+    if(offset===text.length){offset--;if(offset>0&&/[\uDC00-\uDFFF]/.test(text[offset])&&/[\uD800-\uDBFF]/.test(text[offset-1]))offset--;}
+    return {seg:point.seg,offset};
+  }
+  function placeProgress(point){
+    const at=progressCharacter(point),p=at&&segEls[at.seg],rd=$("#reader");if(!p||p.textContent!==segs[at.seg].text)return false;
+    if(paged)buildPagesPaged();const nodes=segmentTextNodes(p),info=paged?rangeColumn(p,nodes,at.offset):rangeGeometry(p,nodes,at.offset);if(!info)return false;
+    const behavior=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";
+    if(paged){setPage(info.col);goToCol(info.col,false);}else{rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-rd.clientHeight*.25;setPage(pageOf(at.seg));}
+    rd.style.scrollBehavior=behavior;readingSeg=point.seg;return true;
+  }
+  function captureProgress(){
+    try{const point=annotationVisiblePoint();retainProgress(point);save(true);return true;}
+    catch(e){progressUnavailable=true;showProgress();return false;}
+  }
+  $("#finishBook").onclick=()=>{const end=progressEnd(segs);if(mode!=="text"||!end)return;progressGesture=false;retainProgress(end);placeProgress(end);save(true);};
 
   // ---------- local library and audio session store ----------
   const DB="inn-reader", STORE="session";
@@ -993,10 +1067,14 @@
   function bookSavedStatus(saved,message){librarySaved=saved;annotationAvailability();$("#bookStatus").textContent=message||(saved?"Saved on this device":"Not saved on this device");}
   function queueLibrary(action){const result=sessionWriteQueue.catch(()=>{}).then(action);sessionWriteQueue=result.catch(()=>{});return result;}
   function saveBookPosition(){
-    const id=sourceIdentity,seg=Math.max(0,posSeg());if(!librarySaved)return;
-    queueLibrary(()=>library.position(id,seg)).then(ok=>{if(mode==="text"&&sourceIdentity===id&&!ok)bookSavedStatus(false,"No longer saved on this device");}).catch(()=>{
-      if(mode==="text"&&sourceIdentity===id)bookSavedStatus(false,"Latest place not saved; reopen from the library to retry");
-    });
+    const id=sourceIdentity,ctx=annotationSession,point=progressPosition&&{...progressPosition},generation=searchGeneration;
+    if(!librarySaved||mode!=="text"||!point||!progressPending)return;
+    const precise=progressPrecise&&annotationInstanceValid(ctx?.instance),value=precise?point:point.seg;
+    queueLibrary(()=>{if(mode!=="text"||sourceIdentity!==id||generation!==searchGeneration)throw new Error("STALE");return library.position(id,value,precise?ctx:null);}).then(ok=>{
+      if(mode!=="text"||sourceIdentity!==id||generation!==searchGeneration)return;
+      if(!ok){progressDirty=true;bookSavedStatus(false,"No longer saved on this device");}
+      else if(progressPosition?.seg===point.seg&&progressPosition?.offset===point.offset){progressDirty=!precise&&progressPrecise;progressPending=false;showProgress();}
+    }).catch(()=>{if(mode==="text"&&sourceIdentity===id&&generation===searchGeneration){progressDirty=true;showProgress();$("#bookStatus").textContent="Latest place not saved; reopen from the library to retry";}});
   }
   function releaseShelf(){shelfGeneration++;for(const url of shelfUrls)URL.revokeObjectURL(url);shelfUrls=[];clear($("#shelf"));}
   async function renderShelf(){
@@ -1016,7 +1094,7 @@
         if(!valid)openButton.disabled=true;
         const detail=valid?r.format.toUpperCase()+" · Last read "+new Date(r.lastReadAt).toLocaleString()+(r.reimportStable?"":" · reimport creates a new copy"):"Unreadable record — remove it or import the source again";
         const info=el("div",{class:"book-info"},[openButton,el("small",{text:detail})]);
-        if(valid)info.appendChild(el("p",{class:"book-progress",text:libraryProgress(r)+"% read (approx.)",title:"Approximate reading progress from your saved place"}));
+        if(valid)info.appendChild(el("p",{class:"book-progress",text:progressLabel(r.doc.segments,r.position),title:"Approximate reading progress from your saved place"}));
         info.appendChild(el("button",{class:"chip",text:"Delete","data-action":"delete","aria-label":"Delete "+title,onclick:async()=>{
           if(!confirm('Delete "'+title+'" from this device?'))return;
           try{await queueLibrary(()=>library.remove(r.identity));if(mode==="text"&&sourceIdentity===r.identity){admitSearchDocument();bookSavedStatus(false,"No longer saved on this device");}await renderShelf();await checkResume();}
@@ -1170,6 +1248,7 @@
     return scrollTextAnchor(i) || {kind:"scroll",i,top:segEls[i] ? segEls[i].getBoundingClientRect().top-rd.getBoundingClientRect().top : null};
   }
   function restoreComfortAnchor(a){
+    if(mode==="text"&&progressPosition&&readerReady()){progressGesture=false;progressUnavailable=!placeProgress(progressPosition);showProgress();return;}
     if(!a || !readerReady()) return;
     const rd=$("#reader");
     if(paged){
@@ -1532,7 +1611,8 @@
       if(paged){setPage(info.col);goToCol(info.col,false);}
       else{const old=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-12;rd.style.scrollBehavior=old;setPage(pageOf(hit.seg));}
       pausedAt=Date.now();lastUserInput=0;owner.complete=true;
-      if(mode!=="text"){const t=audio.currentTime;$("#cur").textContent=fmt(t);$("#seek").value=audio.duration?t/audio.duration*1000:0;updatePosition();}
+      if(mode==="text"){progressGesture=false;retainProgress({seg:hit.seg,offset:hit.start});}
+      else{const t=audio.currentTime;$("#cur").textContent=fmt(t);$("#seek").value=audio.duration?t/audio.duration*1000:0;updatePosition();}
       save(true);
     }catch(e){searchOwner=null;toast("Unable to show this match");}
   }
@@ -1641,7 +1721,7 @@
     try{const latest=await library.annotations(ctx);if(!annotationCurrent(ctx))return;const fresh=latest.items.find(x=>x.id===item.id&&x.revision===item.revision);if(!fresh)throw new Error("CONFLICT");
       annotationItems=latest.items;renderAnnotationMarks();const p=segEls[fresh.start.seg],nodes=segmentTextNodes(p);if(paged)buildPagesPaged();const info=paged?rangeColumn(p,nodes,fresh.start.offset):rangeGeometry(p,nodes,fresh.start.offset);if(!info)throw new Error("GEOMETRY");
       closeSheet();cancelSearchNavigation();curSeg=fresh.start.seg;readingSeg=curSeg;curWordEls=null;for(const e of segEls)e.classList.remove("cur");p.classList.add("cur");setChap(segs[curSeg].start);
-      const rd=$("#reader");if(paged){setPage(info.col);goToCol(info.col,false);}else{const old=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-12;rd.style.scrollBehavior=old;setPage(pageOf(curSeg));}save(true);
+      const rd=$("#reader");if(paged){setPage(info.col);goToCol(info.col,false);}else{const old=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-12;rd.style.scrollBehavior=old;setPage(pageOf(curSeg));}progressGesture=false;retainProgress(fresh.start);save(true);
     }catch(e){if(annotationCurrent(ctx))annotationStatus(e.message==="GEOMETRY"?"Unable to show this annotation.":annotationMessage(e.message));}
   }
   function renderAnnotations(){
@@ -1742,6 +1822,8 @@
     if(!$("#reader").classList.contains("on")) return;
     const tag=(e.target.tagName||"").toLowerCase();
     if(tag==="input"||tag==="textarea") return;
+    if(mode==="text"&&tag==="button"&&e.key===" ")return;
+    if(mode==="text"&&["ArrowUp","ArrowDown","Home","End"].includes(e.key)&&$("#reader").classList.contains("on"))progressGesture=true;
     if(e.key===" "){e.preventDefault();if(mode!=="text")$("#play").click();}
     else if(e.key==="ArrowLeft"){e.preventDefault();if(e.shiftKey)skipChapter(-1);else if(mode!=="text")$("#back").click();}
     else if(e.key==="ArrowRight"){e.preventDefault();if(e.shiftKey)skipChapter(1);else if(mode!=="text")$("#fwd").click();}
@@ -1882,6 +1964,7 @@
       curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();admitSearchDocument();bookSavedStatus(saved);showReaderUI();
       navigateTextSeg(genericRestoreSeg(position?.seg,segs.length),false,false);positionReady=true;lastSave=0;
       if(saved)bindAnnotations(annotationRecord);
+      const restoredPoint=progressRestore(segs,position);progressDirty=false;progressGesture=false;retainProgress(restoredPoint.point,restoredPoint.precise,false);progressUnavailable=restoredPoint.precise&&!placeProgress(restoredPoint.point);showProgress();
       bookSavedStatus(saved);
     });
     if(!committed)return false;
@@ -1905,7 +1988,7 @@
   });
 
   applyComfortCss();
-  function showReaderUI(){ comfortSessionAnchor=null;releaseShelf();if(mode!=="text")$("#bookStatus").textContent="";
+  function showReaderUI(){ comfortSessionAnchor=null;if(mode!=="text"){$("#progressStatus").hidden=true;$("#finishBook").hidden=true;}releaseShelf();if(mode!=="text")$("#bookStatus").textContent="";
     applyComfortCss();
     applyFont(fontPx()); if(mode!=="text"){applyRate();setupMediaSession();}
     $("#load").style.display="none";

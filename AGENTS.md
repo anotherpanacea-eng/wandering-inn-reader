@@ -280,3 +280,5 @@ Beyond `check.sh` (can't be automated here):
 - Forced alignment against real audio needs the operator's machine (aeneas or torch
   installed) — by definition untested in-session; say so.
 </content>
+
+Phase3C source progress: run `python3 tools/run_node_tests.py tests/test_progress.mjs` with zero skips as part of the canonical local gate.
