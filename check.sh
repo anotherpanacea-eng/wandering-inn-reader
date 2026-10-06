@@ -34,6 +34,8 @@ echo "→ schema numeric timing-boundary test"
 
 echo "→ align.py data-contract test"
 "$PYTHON" tests/test_align.py
+echo "→ plan-only book manifest and no-execution boundary test"
+"$PYTHON" tests/test_book_plan.py
 
 echo "→ track splitter sentence/word timing contract test"
 "$PYTHON" tests/test_split_tracks.py
