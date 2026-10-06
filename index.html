@@ -175,7 +175,7 @@
   <div id="nowChap"></div>
   <button class="tbtn" id="nextChap" title="Next chapter" aria-label="Next chapter">⏭</button>
   <button class="tbtn" id="searchBtn" title="Search this book" aria-label="Search this book" disabled>Search</button>
-  <button class="tbtn" id="annotationsBtn" aria-label="Annotations" disabled>Notes</button>
+  <button class="tbtn" id="annotationsBtn" aria-label="Notes and annotations" disabled>Notes</button>
   <button class="tbtn" id="settingsBtn" title="Display &amp; timer" aria-label="Settings">Aa</button>
 </header>
 
@@ -1588,7 +1588,7 @@
   function renderAnnotationMarks(){if(mode==="text")for(let i=0;i<segs.length;i++)renderAnnotationSegment(i);}
   async function refreshAnnotations(){
     const ctx=annotationSession,run=++annotationRefresh;if(!annotationCurrent(ctx)||!annotationInstanceValid(ctx.instance))return;
-    try{const data=await library.annotations(ctx);if(!annotationCurrent(ctx)||run!==annotationRefresh)return;annotationItems=data.items;annotationProblem="";renderAnnotationMarks();}
+    try{const data=await library.annotations(ctx);if(!annotationCurrent(ctx)||run!==annotationRefresh)return;const changed=JSON.stringify(data.items)!==JSON.stringify(annotationItems);annotationItems=data.items;annotationProblem="";if(changed)renderAnnotationMarks();}
     catch(e){if(!annotationCurrent(ctx)||run!==annotationRefresh)return;annotationProblem=annotationMessage(e.message);if(["DATA","STALE","SOURCE"].includes(e.message)){annotationItems=[];renderAnnotationMarks();}}
     if(sheetKind==="annotations"&&!annotationEditor)renderAnnotations();
   }
@@ -1621,7 +1621,7 @@
     try{const range=annotationSelected();return {ctx:annotationSession,range,point:range?range.start:annotationVisiblePoint(),error:""};}
     catch(e){return {ctx:annotationSession,range:null,point:null,error:annotationMessage("RANGE")};}
   }
-  function annotationExcerpt(item){let out="",room=120;for(let i=item.start.seg;i<segs.length&&room>0;i++){const end=item.kind==="highlight"?(i>item.end.seg?0:i===item.end.seg?item.end.offset:segs[i].text.length):segs[i].text.length;if(i>item.start.seg&&item.kind!=="highlight")break;for(const cp of segs[i].text.slice(i===item.start.seg?item.start.offset:0,end)){if(!room--)break;out+=cp;}}return out;}
+  function annotationExcerpt(item){let out="",room=120;for(let i=item.start.seg;i<segs.length&&room>0;i++){if(item.kind==="highlight"&&i>item.end.seg)break;const end=item.kind==="highlight"?(i>item.end.seg?0:i===item.end.seg?item.end.offset:segs[i].text.length):segs[i].text.length;if(i>item.start.seg&&item.kind!=="highlight")break;for(const cp of segs[i].text.slice(i===item.start.seg?item.start.offset:0,end)){if(!room--)break;out+=cp;}}return out;}
   function annotationForm(kind,item=null,focusNote=false){
     const ctx=annotationSession,capture=annotationCapture;
     if(annotationBusy||annotationProblem||!annotationCurrent(ctx))return;
@@ -1634,7 +1634,7 @@
     annotationBusy=true;for(const n of $("#sheet").querySelectorAll("#annotationLabel,#annotationNote"))n.disabled=true;$("#annotationSave")?.setAttribute("disabled","");for(const n of $("#sheet").querySelectorAll("[data-annotation-action]"))n.disabled=true;annotationStatus("Saving…");
     try{const data=await queueLibrary(()=>library.annotations(ctx,op));if(!annotationCurrent(ctx))return;annotationItems=data.items;annotationProblem="";annotationEditor=null;renderAnnotationMarks();if(sheetKind==="annotations"){renderAnnotations();annotationStatus("Saved on this device.");}}
     catch(e){if(annotationCurrent(ctx)){if(editor){editor.label=$("#annotationLabel")?.value??editor.label;editor.note=$("#annotationNote")?.value??editor.note;}annotationStatus(annotationMessage(e.message));}}
-    finally{if(annotationCurrent(ctx)){annotationBusy=false;for(const n of $("#sheet").querySelectorAll("#annotationLabel,#annotationNote"))n.disabled=false;$("#annotationSave")?.removeAttribute("disabled");for(const n of $("#sheet").querySelectorAll("[data-annotation-action]"))n.disabled=false;}}
+    finally{if(annotationCurrent(ctx)){annotationBusy=false;for(const n of $("#sheet").querySelectorAll("#annotationLabel,#annotationNote"))n.disabled=false;$("#annotationSave")?.removeAttribute("disabled");for(const n of $("#sheet").querySelectorAll("[data-annotation-action]"))n.disabled=false;if(sheetKind==="annotations"&&!annotationEditor)$("#annotationBookmark")?.focus();}}
   }
   async function navigateAnnotation(item){
     const ctx=annotationSession;if(!annotationCurrent(ctx))return;
