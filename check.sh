@@ -29,8 +29,16 @@ echo "→ safe-pattern lint (no HTML-string DOM / parenthesised eval-mode call)"
 echo "→ byte-compile pipeline + tools + tests"
 "$PYTHON" -m py_compile pipeline/*.py tools/*.py tests/*.py
 
+echo "→ schema numeric timing-boundary test"
+"$PYTHON" tests/test_schema_numeric.py
+
 echo "→ align.py data-contract test"
 "$PYTHON" tests/test_align.py
+echo "→ plan-only book manifest and no-execution boundary test"
+"$PYTHON" tests/test_book_plan.py
+
+echo "→ track splitter sentence/word timing contract test"
+"$PYTHON" tests/test_split_tracks.py
 
 echo "→ edit-aware aligner cut-detection / gap-emit test (synthetic, no GPU)"
 "$PYTHON" tests/test_editaware.py
@@ -38,6 +46,8 @@ echo "→ opt-in fuzzy ASR overlap boundary/default-off test"
 "$PYTHON" tests/test_fuzzy_overlap.py
 echo "→ wps-gate threshold-logic test"
 "$PYTHON" tests/test_wps_check.py
+echo "→ numbered input discovery regression (synthetic, no audio/model)"
+"$PYTHON" tests/test_track_selection.py
 echo "→ mandatory Node no-skip gate regression"
 "$PYTHON" tests/test_node_gate.py
 echo "→ draft-first merge-train policy test"
@@ -46,7 +56,7 @@ echo "→ @claude workflow safety-boundary test"
 "$PYTHON" tests/test_claude_workflow.py
 
 # Player behavior is a JavaScript/security boundary, so the dependency-free Node
-# runner is mandatory and neither suite may silently skip.
+# runner is mandatory and no suite may silently skip.
 if ! command -v node >/dev/null 2>&1; then
   echo "✗ player behavioral gates require node" >&2
   exit 1
@@ -55,5 +65,12 @@ echo "→ paged-anchor regression test (index.html pagedAnchors; Codex P1 PR #27
 "$PYTHON" tools/run_node_tests.py tests/test_paged_anchor.mjs
 echo "→ generic-ingest behavioral/security test (mandatory, no skips)"
 "$PYTHON" tools/run_node_tests.py tests/test_generic_ingest.mjs
+echo "→ local-search source-offset behavioral test (mandatory, no skips)"
+"$PYTHON" tools/run_node_tests.py tests/test_search.mjs
+echo "Annotation source-range and persistence contract tests (mandatory, no skips)"
+"$PYTHON" tools/run_node_tests.py tests/test_annotations.mjs
+
+echo "Source-progress tests (mandatory, no skips)"
+"$PYTHON" tools/run_node_tests.py tests/test_progress.mjs
 
 echo "✓ all local checks passed"

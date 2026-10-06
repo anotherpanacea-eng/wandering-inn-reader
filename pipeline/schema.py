@@ -23,7 +23,12 @@ class SchemaError(ValueError):
     """Raised by validate_doc(strict=True) when the doc has any ERROR-level problem."""
 
 def _num(x):                                    # reject NaN/Infinity -- json.dump emits them and the
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)  # browser JSON.parse chokes
+    if not isinstance(x, (int, float)) or isinstance(x, bool):
+        return False
+    try:
+        return math.isfinite(x)                 # browser JSON.parse chokes on non-finite values
+    except OverflowError:                      # JSON integers may exceed float's finite range
+        return False
 
 def validate_doc(doc, source="", *, strict=True):
     """Validate a player doc. Returns a list of (level, message) tuples ("ERROR"/"WARN").

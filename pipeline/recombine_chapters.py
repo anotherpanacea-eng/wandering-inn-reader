@@ -60,6 +60,9 @@ def main():
     for p in glob.glob(a.audio_glob):
         n = track_no(p)
         if n is not None:
+            if n in by_no:
+                sys.exit(f"--audio-glob matched multiple files for track {n:02d}: "
+                         f"{by_no[n]} and {p} -- use an unambiguous audio glob")
             by_no[n] = p
     ordered = [t for e in tmap for t in e["tracks"]]
     for t in ordered:

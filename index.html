@@ -138,6 +138,9 @@
   .book-info small{display:block;color:var(--dim);font-size:.75rem;}.book-progress{font-size:.8rem;}
   #bookStatus{display:none;padding:2px 14px;font-size:.7rem;color:var(--dim);}
   body:has(#reader.on) #bookStatus:not(:empty){display:block;}
+  .annotation-mark{background:#ffe299;color:#241a00;} .annotation-note{white-space:pre-wrap;}
+  #annotationAvailability{font-size:.75rem;color:var(--dim);text-align:center;}
+  #sheet textarea,#sheet input[type="text"]{width:100%;} #annotationList article{padding:12px 0;border-bottom:1px solid var(--line);}
 </style>
 </head>
 <body>
@@ -171,10 +174,15 @@
   <button class="tbtn" id="prevChap" title="Previous chapter" aria-label="Previous chapter">⏮</button>
   <div id="nowChap"></div>
   <button class="tbtn" id="nextChap" title="Next chapter" aria-label="Next chapter">⏭</button>
+  <button class="tbtn" id="searchBtn" title="Search this book" aria-label="Search this book" disabled>Search</button>
+  <button class="tbtn" id="annotationsBtn" aria-label="Notes and annotations" disabled>Notes</button>
   <button class="tbtn" id="settingsBtn" title="Display &amp; timer" aria-label="Settings">Aa</button>
 </header>
 
 <div id="bookStatus" role="status"></div>
+<div id="progressStatus" role="status" style="padding:2px 14px;font-size:.75rem"></div>
+<button id="finishBook" type="button" class="chip" hidden>Finish book</button>
+<div id="annotationAvailability" role="status" hidden></div>
 <main id="reader"></main>
 
 <footer id="bar">
@@ -472,12 +480,12 @@
     if(readerWired) return; readerWired=true;
     const r=$("#reader");
     r.addEventListener("scroll",onReaderScroll,{passive:true});
-    r.addEventListener("wheel",()=>{ comfortSessionAnchor=null; lastUserInput=Date.now(); },{passive:true});
-    r.addEventListener("pointerdown",()=>{ comfortSessionAnchor=null; lastUserInput=Date.now(); },{passive:true});
+    r.addEventListener("wheel",()=>{ comfortSessionAnchor=null; lastUserInput=Date.now(); if(mode==="text")progressGesture=true; },{passive:true});
+    r.addEventListener("pointerdown",()=>{ comfortSessionAnchor=null; lastUserInput=Date.now(); if(mode==="text")progressGesture=true; },{passive:true});
     r.addEventListener("click",onTap);
     let tsx=0,tsy=0,tst=0;
     r.addEventListener("touchstart",e=>{ const t=e.changedTouches[0]; tsx=t.clientX; tsy=t.clientY;
-      tst=Date.now(); comfortSessionAnchor=null; lastUserInput=tst; },{passive:true});
+      tst=Date.now(); comfortSessionAnchor=null; lastUserInput=tst;if(mode==="text")progressGesture=true; },{passive:true});
     r.addEventListener("touchend",e=>{ const t=e.changedTouches[0], dx=t.clientX-tsx, dy=t.clientY-tsy;
       if(Date.now()-tst<600 && Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.6) turnPage(dx<0?1:-1); },{passive:true});
   }
@@ -569,7 +577,8 @@
     return Math.max(0, Math.min(pages.length-1, colFromContentX(x, pageW)));
   }
   function relayoutPaged(){                          // re-measure + keep the current place on screen
-    if(!(paged && readerReady())) return;
+    if(!readerReady()) return;
+    if(mode==="text"&&progressPosition){if(progressGesture){clearTimeout(scrollT);scrollT=0;captureProgress();}progressGesture=false;progressUnavailable=!placeProgress(progressPosition);showProgress();return;}
     const a=comfortAnchor(); restoreComfortAnchor(a);
   }
   function setMode(m){ comfortSessionAnchor=null;
@@ -581,6 +590,7 @@
     if(paged){ buildPagesPaged(); const pg=pageOf(i); setPage(pg); goToCol(pg,false); }
     else { buildPages(); const pg=pageOf(i); setPage(pg);
       const el=segEls[pages[pg].seg]; if(el) rd.scrollTo({top:Math.max(0,el.offsetTop-12)}); }
+    if(mode==="text"&&progressPosition){progressGesture=false;progressUnavailable=!placeProgress(progressPosition);showProgress();}
     if(sheetKind==="settings") renderSettings();
   }
   function segAtAnchor(){   // the segment crossing a line ~1/4 down the reader = what you're reading
@@ -592,9 +602,12 @@
   function onReaderScroll(){
     userScrollPause=Date.now()+2500;        // suspend playback auto-follow briefly (unchanged)
     if(mode!=="text"&&!audio.paused) return;               // only text / paused reader feeds the cursor
+    if(mode==="text"&&!progressGesture)return;
     clearTimeout(scrollT); scrollT=setTimeout(captureReadingPos,160);
   }
   function captureReadingPos(){
+    scrollT=0;
+    if(mode==="text"){if(progressGesture&&$("#reader").classList.contains("on")){progressGesture=false;captureProgress();}return;}
     if(paged || !$("#reader").classList.contains("on")) return; // paged mode: the reading place comes from turnPage, not vertical scroll
     // capture only on a real reader gesture made *after* the pause — so neither the cold-open
     // restore scroll nor a follow/seek scroll still settling from before the pause can hijack it.
@@ -603,18 +616,18 @@
     if(i<0 || i>=segs.length) return;
     readingSeg=i; setPage(pageOf(i)); save();
   }
-  function turnPage(dir){ comfortSessionAnchor=null;
+  function turnPage(dir){ cancelSearchNavigation();comfortSessionAnchor=null;
     if(pages.length<2) return;
     lastUserInput=Date.now();
     const target=Math.max(0,Math.min(pages.length-1,(curPage<0?0:curPage)+dir));
     if(paged){                                       // slide horizontally to the target column
-      goToCol(target,true);
-      if(mode==="text"||audio.paused){ readingSeg=pageSeg[target]; save(); }
+      goToCol(target,mode!=="text");
+      if(mode==="text"){setPage(target);progressGesture=false;captureProgress();}else if(audio.paused){ readingSeg=pageSeg[target]; save(); }
       setPage(target); return;
     }
     const el=segEls[pages[target].seg]; if(!el) return;
-    $("#reader").scrollTo({top:Math.max(0,el.offsetTop-12), behavior:"smooth"});
-    if(mode==="text"||audio.paused){ readingSeg=pages[target].seg; save(); }
+    $("#reader").scrollTo({top:Math.max(0,el.offsetTop-12), behavior:mode==="text"?"instant":"smooth"});
+    if(mode==="text"){progressGesture=false;captureProgress();}else if(audio.paused){ readingSeg=pages[target].seg; save(); }
     setPage(target);
   }
 
@@ -630,12 +643,12 @@
     const sg=e.target.closest(".seg");
     if(sg){ seekTo(segs[+sg.dataset.i].start); }
   }
-  function seekTo(t){ if(mode==="text")return;audio.currentTime=t+0.001; if(audio.paused) audio.play(); }
+  function seekTo(t){ cancelSearchNavigation();if(mode==="text")return;audio.currentTime=t+0.001; if(audio.paused) audio.play(); }
   function navigateTextSeg(i,smooth,doSave){
     if(mode!=="text"||!segs.length) return; i=Math.max(0,Math.min(segs.length-1,Number.isInteger(i)?i:0));
     readingSeg=i; curSeg=-1; setSeg(i); setChap(segs[i].start); const p=pageOf(i); setPage(p);
     if(paged) goToCol(p,!!smooth); else {const e=segEls[i];if(e){const reader=$("#reader"),behavior=reader.style.scrollBehavior;if(!smooth)reader.style.scrollBehavior="auto";reader.scrollTo({top:Math.max(0,e.offsetTop-12),behavior:smooth?"smooth":"instant"});reader.style.scrollBehavior=behavior;}}
-    if(doSave) save(true);
+    if(doSave){if(mode==="text"){progressGesture=false;retainProgress({seg:i,offset:0});}save(true);}
   }
 
   // ---------- highlight ----------
@@ -653,13 +666,14 @@
   function setSeg(i){
     if(i===curSeg) return;
     if(curSeg>=0 && segEls[curSeg]){           // collapse previous active sentence back to plain text
-      const p=segEls[curSeg]; p.classList.remove("cur"); p.textContent=segs[curSeg].text;
+      const p=segEls[curSeg]; p.classList.remove("cur"); p.textContent=segs[curSeg].text;if(mode==="text")renderAnnotationSegment(curSeg);
       if(audio.currentTime>=segs[curSeg].end) p.classList.add("read");
     }
     curSeg=i; curWordEls=null; pgFollowWord=-1;
     const p=segEls[i]; if(!p) return;
     const sg=segs[i];
-    if(sg.words && sg.words.length){          // expand current sentence into word spans
+    if(mode==="text")renderAnnotationSegment(i);
+    else if(sg.words && sg.words.length){          // expand current sentence into word spans
       clear(p);
       const f=document.createDocumentFragment();
       sg.words.forEach(w=>{ f.appendChild(el("span",{class:"w", data:{s:String(w.s), e:String(w.e)}, text:w.w+" "})); });
@@ -707,6 +721,7 @@
     if(sheetKind==="chapters") markCurrentChapter();
   }
   function tick(){
+    if(searchOwner)return;
     if(mode==="text")return;
     const t=audio.currentTime;
     setSeg(findSeg(t)); setWord(t); setChap(t);
@@ -722,10 +737,10 @@
     const ms=navigator.mediaSession;
     const set=(a,fn)=>{ try{ ms.setActionHandler(a,fn); }catch(e){} };
     set("play",()=>resumePlay());
-    set("pause",()=>audio.pause());
-    set("seekbackward",d=>{ audio.currentTime=Math.max(0,audio.currentTime-((d&&d.seekOffset)||15)); });
-    set("seekforward",d=>{ audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+((d&&d.seekOffset)||15)); });
-    set("seekto",d=>{ if(d.fastSeek && "fastSeek" in audio){ audio.fastSeek(d.seekTime); return; } audio.currentTime=d.seekTime; });
+    set("pause",()=>{cancelSearchNavigation();audio.pause();});
+    set("seekbackward",d=>{ cancelSearchNavigation(); audio.currentTime=Math.max(0,audio.currentTime-((d&&d.seekOffset)||15)); });
+    set("seekforward",d=>{ cancelSearchNavigation(); audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+((d&&d.seekOffset)||15)); });
+    set("seekto",d=>{ cancelSearchNavigation(); if(d.fastSeek && "fastSeek" in audio){ audio.fastSeek(d.seekTime); return; } audio.currentTime=d.seekTime; });
     set("previoustrack",()=>{ if(playlist) prevTrack(); else jumpChapter(-1); });
     set("nexttrack",()=>{ if(playlist) nextTrack(); else jumpChapter(1); });
   }
@@ -755,7 +770,7 @@
     seekTo(chapters[target].start);
   }
   // whole-book chapter skip: crosses tracks via globalChaps (single-file falls back to jumpChapter)
-  function skipChapter(dir){
+  function skipChapter(dir){ cancelSearchNavigation();
     if(mode==="text"){
       if(!chapters.length)return;let base=curChap<0?0:curChap,target=Math.max(0,Math.min(chapters.length-1,base+dir));
       navigateTextSeg(chapters[target].seg,false,true);return;
@@ -780,7 +795,7 @@
   // While paused with the reader scrolled ahead, `seg` is the furthest point and wins on restore.
   let lastSave=0;
   function posSeg(){ return ((mode==="text"||audio.paused) && readingSeg>=0) ? readingSeg : curSeg; }
-  function save(force){ if(!positionReady)return;const n=Date.now(); if(!force&&n-lastSave<1500) return; lastSave=n;
+  function save(force){ if(searchOwner&&!searchOwner.complete)return;if(!positionReady)return;const n=Date.now(); if(!force&&n-lastSave<1500) return; lastSave=n;
     if(mode==="text"){saveBookPosition();return;}
     try{ storageSet(posKey(), JSON.stringify(mode==="text"?{seg:Math.max(0,posSeg())}:{t:audio.currentTime, seg:posSeg()})); }catch(e){}
     if(playlist) savePlaylistPos(); }
@@ -798,18 +813,93 @@
   }
 
   // LIBRARY_BEGIN
+  // ANNOTATIONS_BEGIN
+  function annotationKeys(x,keys){return !!x&&typeof x==="object"&&!Array.isArray(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));}
+  function annotationBoundary(text,n){return Number.isSafeInteger(n)&&n>=0&&n<=text.length&&!(n>0&&n<text.length&&/[\uD800-\uDBFF]/.test(text[n-1])&&/[\uDC00-\uDFFF]/.test(text[n]));}
+  function annotationPoint(source,p,character=false){return annotationKeys(p,["seg","offset"])&&Number.isSafeInteger(p.seg)&&p.seg>=0&&p.seg<source.length&&annotationBoundary(source[p.seg].text,p.offset)&&(!character||p.offset<source[p.seg].text.length);}
+  function annotationCanonical(source,start,end){
+    if(!annotationPoint(source,start)||!annotationPoint(source,end)||start.seg>end.seg||(start.seg===end.seg&&start.offset>=end.offset))throw new Error("RANGE");
+    let first=null,last=null;
+    for(let i=start.seg;i<=end.seg;i++){const a=i===start.seg?start.offset:0,b=i===end.seg?end.offset:source[i].text.length;if(a<b){first ||= {seg:i,offset:a};last={seg:i,offset:b};}}
+    if(!first)throw new Error("RANGE");return {start:first,end:last};
+  }
+  function annotationSourceEqual(a,b){return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((s,i)=>s.text===b[i].text);}
+  function annotationInstanceValid(x){return typeof x==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(x);}
+  function newAnnotationInstance(){
+    try{const b=new Uint8Array(16);crypto.getRandomValues(b);b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;const h=Array.from(b,n=>n.toString(16).padStart(2,"0")).join("");return h.slice(0,8)+"-"+h.slice(8,12)+"-"+h.slice(12,16)+"-"+h.slice(16,20)+"-"+h.slice(20);}catch(e){return null;}
+  }
+  function annotationText(label,note){
+    if(typeof label!=="string"||typeof note!=="string")throw new Error("DATA");
+    let count=0;for(const cp of label)if(++count>120)throw new Error("LIMIT");if(note.length>8192)throw new Error("LIMIT");
+  }
+  function annotationData(a,source){
+    if(!annotationKeys(a,["version","nextId","items"])||a.version!==1||!Number.isSafeInteger(a.nextId)||a.nextId<1||!Array.isArray(a.items)||a.items.length>1000)throw new Error("DATA");
+    const ids=new Set();
+    for(const item of a.items){
+      const highlight=item?.kind==="highlight";
+      if(!annotationKeys(item,highlight?["id","revision","kind","start","end","label","note"]:["id","revision","kind","start","label","note"])||(!highlight&&item.kind!=="bookmark")||!Number.isSafeInteger(item.id)||item.id<1||item.id>=a.nextId||ids.has(item.id)||!Number.isSafeInteger(item.revision)||item.revision<1||!annotationPoint(source,item.start,true))throw new Error("DATA");
+      ids.add(item.id);annotationText(item.label,item.note);
+      if(highlight){const c=annotationCanonical(source,item.start,item.end);if(c.start.seg!==item.start.seg||c.start.offset!==item.start.offset||c.end.seg!==item.end.seg||c.end.offset!==item.end.offset)throw new Error("DATA");}
+    }return a;
+  }
+  function annotationStored(record){return annotationData(Object.hasOwn(record,"annotations")?record.annotations:{version:1,nextId:1,items:[]},record.doc.segments);}
+  function annotationChange(a,source,op){
+    annotationData(a,source);const next={version:1,nextId:a.nextId,items:a.items.map(x=>({...x,start:{...x.start},...(x.end?{end:{...x.end}}:{})}))};
+    if(op.action==="create"){
+      if(next.items.length>=1000||next.nextId===Number.MAX_SAFE_INTEGER)throw new Error("LIMIT");annotationText(op.label,op.note);
+      const item={id:next.nextId++,revision:1,kind:op.kind,start:{...op.start},label:op.label,note:op.note};
+      if(op.kind==="highlight")Object.assign(item,annotationCanonical(source,op.start,op.end));next.items.push(item);
+    }else{
+      const i=next.items.findIndex(x=>x.id===op.id);if(i<0||next.items[i].revision!==op.revision)throw new Error("CONFLICT");
+      if(op.action==="delete")next.items.splice(i,1);
+      else if(op.action==="edit"){annotationText(op.label,op.note);if(next.items[i].revision===Number.MAX_SAFE_INTEGER)throw new Error("LIMIT");Object.assign(next.items[i],{label:op.label,note:op.note,revision:next.items[i].revision+1});}
+      else throw new Error("DATA");
+    }return annotationData(next,source);
+  }
+  function annotationIntervals(items,seg,length){
+    const out=[];for(const item of items)if(item.kind==="highlight"&&seg>=item.start.seg&&seg<=item.end.seg){const a=seg===item.start.seg?item.start.offset:0,b=seg===item.end.seg?item.end.offset:length;if(a<b)out.push([a,b]);}
+    out.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);const merged=[];for(const r of out){const last=merged.at(-1);if(last&&r[0]<=last[1])last[1]=Math.max(last[1],r[1]);else merged.push(r.slice());}return merged;
+  }
+  // ANNOTATIONS_END
+  // PROGRESS_BEGIN
+  function progressEnd(source){for(let i=source.length-1;i>=0;i--)if(source[i].text.length)return {seg:i,offset:source[i].text.length};return null;}
+  function progressPoint(source,p){return annotationPoint(source,p);}
+  function progressRestore(source,position){
+    const seg=genericRestoreSeg(position?.seg,source.length),precise=!!position&&Number.isSafeInteger(position.seg)&&position.seg===seg&&progressPoint(source,{seg,offset:position.offset});
+    return {point:{seg,offset:precise?position.offset:0},precise};
+  }
+  // Source arrays are immutable within one admitted document generation. Keep
+  // derived totals in memory only; a new source array receives its own index.
+  const progressIndexes=new WeakMap();
+  function progressIndex(source){
+    let index=progressIndexes.get(source);if(index)return index;
+    const points=[0],words=[0];
+    for(const segment of source){
+      let count=0;for(const cp of segment.text)count++;
+      points.push(points.at(-1)+count);
+      words.push(words.at(-1)+(segment.text.match(/\S+/gu)||[]).length);
+    }
+    index={points,words,end:progressEnd(source)};progressIndexes.set(source,index);return index;
+  }
+  function progressMeasure(source,p){
+    if(!progressPoint(source,p))throw new Error("POSITION");
+    const index=progressIndex(source),text=source[p.seg].text;
+    let before=index.points[p.seg],remaining=index.words.at(-1)-index.words[p.seg+1];
+    for(const cp of text.slice(0,p.offset))before++;
+    for(const word of text.matchAll(/\S+/gu))if(word.index+word[0].length>p.offset)remaining++;
+    const total=index.points.at(-1),end=index.end,finished=!!end&&p.seg===end.seg&&p.offset===end.offset;
+    return {percent:total?Math.floor(100*before/total):null,minutes:finished?0:index.words.at(-1)?Math.ceil(remaining/200):null,finished,total};
+  }
+  // PROGRESS_END
   function libraryRecordValid(r){
     return !!r && r.version===1 && typeof r.identity==="string" && !!r.identity &&
       ["txt","md","epub"].includes(r.format) && typeof r.reimportStable==="boolean" &&
       Number.isFinite(r.importedAt) && r.importedAt>=0 && Number.isFinite(r.lastReadAt) && r.lastReadAt>=0 &&
       !validateDoc(r.doc,"saved book");
   }
-  function libraryProgress(r){
-    if(!libraryRecordValid(r))return 0;
-    const at=genericRestoreSeg(r.position&&r.position.seg,r.doc.segments.length);
-    let total=0,before=0;
-    r.doc.segments.forEach((s,i)=>{const n=(s.text.match(/\S+/g)||[]).length;total+=n;if(i<at)before+=n;});
-    return total?Math.min(99,Math.floor(100*before/total)):0;
+  function progressLabel(source,position){
+    const restored=progressRestore(source,position),m=progressMeasure(source,restored.point),approx=restored.precise?"":" (approximate)";
+    return "Position: "+(m.percent===null?"unavailable":m.percent+"%"+approx)+" · Estimated time left: "+(m.minutes===null?"unavailable":m.minutes+" min at 200 words/min"+approx);
   }
   // Header bounds precede browser decoding; unsupported variants simply have no cover.
   function coverHeader(input,media){
@@ -865,6 +955,7 @@
       });
     }
     const valid=r=>{if(!libraryRecordValid(r))throw new Error("Saved book is unreadable; delete it or import it again");return r;};
+    const lifetime=r=>{if(!Object.hasOwn(r,"annotationInstance")){const id=newAnnotationInstance();if(id)r.annotationInstance=id;}return r;};
     const position=(r,seg)=>({seg:genericRestoreSeg(seg,r.doc.segments.length)});
     return {
       migrate:()=>transaction("readwrite",(tx,read,done)=>read("session","library-migration",mark=>{
@@ -873,7 +964,7 @@
           const session=tx.objectStore("session"),finish=(kind,id)=>{const mark={version:1,kind};session.put(mark,"library-migration");if(!selector&&kind==="text")session.put({kind:"text",identity:id},"resume");else if(!selector&&kind==="audio")session.put({kind:"audio"},"resume");done(mark);};
           if(!legacy||legacy.mode!=="text"||validateDoc(legacy.doc,"legacy")){finish(legacy&&legacy.mode!=="text"&&legacy.doc?"audio":"empty");return;}
           const id=typeof legacy.identity==="string"&&legacy.identity?legacy.identity:"legacy:"+Date.now()+":"+Math.random();
-          read("books",id,old=>{if(!old){const now=Date.now(),r={version:1,identity:id,format:["txt","md","epub"].includes(legacy.format)?legacy.format:"txt",reimportStable:!!legacy.identity&&legacy.reimportStable!==false,doc:legacy.doc,importedAt:now,lastReadAt:now,cover:null};r.position=position(r,readLegacyPosition(id));tx.objectStore("books").put(r);}finish("text",id);});
+          read("books",id,old=>{if(!old){const now=Date.now(),r={version:1,identity:id,format:["txt","md","epub"].includes(legacy.format)?legacy.format:"txt",reimportStable:!!legacy.identity&&legacy.reimportStable!==false,doc:legacy.doc,importedAt:now,lastReadAt:now,cover:null};r.position=position(r,readLegacyPosition(id));lifetime(r);tx.objectStore("books").put(r);}finish("text",id);});
         }));
       })),
       list:()=>transaction("readonly",(tx,read,done)=>{const q=tx.objectStore("books").getAll();q.onsuccess=()=>done(q.result);}),
@@ -881,18 +972,39 @@
       admit:(record,current=()=>true)=>transaction("readwrite",(tx,read,done)=>{
         valid(record);read("books",record.identity,old=>{
           if(!current())return done(null);
-          const now=Date.now(),r={...record,importedAt:old&&libraryRecordValid(old)?old.importedAt:now,lastReadAt:now};
-          r.position=position(r,old&&libraryRecordValid(old)?old.position&&old.position.seg:readLegacyPosition(r.identity));
+          const usable=old&&libraryRecordValid(old),same=usable&&annotationSourceEqual(old.doc.segments,record.doc.segments);
+          if(usable&&Object.hasOwn(old,"annotations")&&!same)throw new Error("Saved annotated text differs; the existing book was kept");
+          const now=Date.now(),r={...record,importedAt:usable?old.importedAt:now,lastReadAt:now};
+          if(same){for(const key of ["annotations","annotationInstance"])if(Object.hasOwn(old,key))r[key]=old[key];}
+          lifetime(r);r.position=same&&old.position&&typeof old.position==="object"?{...old.position}:position(r,usable?old.position&&old.position.seg:readLegacyPosition(r.identity));
           tx.objectStore("books").put(r);tx.objectStore("session").put({kind:"text",identity:r.identity},"resume");done(r);
         });
       }),
       open:(id,current=()=>true)=>transaction("readwrite",(tx,read,done)=>read("books",id,r=>{
-        if(!r)return done(null);valid(r);if(!current())return done(null);r.lastReadAt=Date.now();r.position=position(r,r.position&&r.position.seg);
+        if(!r)return done(null);valid(r);if(!current())return done(null);lifetime(r);r.lastReadAt=Date.now();if(!r.position||typeof r.position!=="object")r.position=position(r,r.position&&r.position.seg);
         tx.objectStore("books").put(r);tx.objectStore("session").put({kind:"text",identity:id},"resume");done(r);
       })),
-      position:(id,seg)=>transaction("readwrite",(tx,read,done)=>read("books",id,r=>{
-        if(!r)return done(false);valid(r);r.position=position(r,seg);r.lastReadAt=Date.now();tx.objectStore("books").put(r);done(true);
-      })),
+      annotations:(ctx,op=null)=>transaction(op?"readwrite":"readonly",(tx,read,done)=>{
+        if(!ctx.current())throw new Error("STALE");
+        read("books",ctx.identity,r=>{
+          if(!ctx.current()||!r||!annotationInstanceValid(ctx.instance)||r.annotationInstance!==ctx.instance)throw new Error("STALE");
+          valid(r);if(!annotationSourceEqual(r.doc.segments,ctx.source))throw new Error("SOURCE");
+          const data=annotationStored(r);
+          if(op){r.annotations=annotationChange(data,r.doc.segments,op);tx.objectStore("books").put(r);done(r.annotations);}else done(data);
+        });
+      }),
+      position:(id,value,ctx=null)=>transaction("readwrite",(tx,read,done)=>{
+        if(ctx&&!ctx.current())throw new Error("STALE");
+        read("books",id,r=>{
+          if(!r)return done(false);valid(r);
+          if(ctx){if(!ctx.current()||!annotationInstanceValid(ctx.instance)||r.annotationInstance!==ctx.instance)throw new Error("STALE");if(!annotationSourceEqual(r.doc.segments,ctx.source))throw new Error("SOURCE");}
+          if(value&&typeof value==="object"){
+            if(!ctx||!progressPoint(r.doc.segments,value))throw new Error("POSITION");
+            r.position={...r.position,seg:value.seg,offset:value.offset};
+          }else{r.position={...r.position,...position(r,value)};delete r.position.offset;}
+          r.lastReadAt=Date.now();tx.objectStore("books").put(r);done(true);
+        });
+      }),
       remove:id=>transaction("readwrite",(tx,read,done)=>{
         tx.objectStore("books").delete(id);read("session","resume",r=>{if(r&&r.kind==="text"&&r.identity===id)tx.objectStore("session").delete("resume");done(true);});
       }),
@@ -904,6 +1016,30 @@
     };
   }
   // LIBRARY_END
+  let progressPosition=null,progressPrecise=false,progressUnavailable=false,progressDirty=false,progressGesture=false,progressPending=false;
+  function showProgress(){
+    const text=mode==="text"&&readerReady();$("#progressStatus").hidden=!text;$("#finishBook").hidden=!text||!progressEnd(segs);
+    if(!text)return;
+    $("#progressStatus").textContent=progressLabel(segs,progressPrecise?progressPosition:{seg:progressPosition?.seg})+(progressUnavailable?" · Position unavailable for this view":"")+(progressDirty?" · Latest position not saved":"")+(!annotationInstanceValid(annotationSession?.instance)?" · Precise position cannot be saved on this device":"");
+  }
+  function retainProgress(point,precise=true,intent=true){progressPending=intent;progressPosition={...point};progressPrecise=precise;progressUnavailable=false;readingSeg=point.seg;showProgress();}
+  function progressCharacter(point){
+    const text=segs[point.seg]?.text;if(!text)return null;let offset=point.offset;
+    if(offset===text.length){offset--;if(offset>0&&/[\uDC00-\uDFFF]/.test(text[offset])&&/[\uD800-\uDBFF]/.test(text[offset-1]))offset--;}
+    return {seg:point.seg,offset};
+  }
+  function placeProgress(point){
+    const at=progressCharacter(point),p=at&&segEls[at.seg],rd=$("#reader");if(!p||p.textContent!==segs[at.seg].text)return false;
+    if(paged)buildPagesPaged();const nodes=segmentTextNodes(p),info=paged?rangeColumn(p,nodes,at.offset):rangeGeometry(p,nodes,at.offset);if(!info)return false;
+    const behavior=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";
+    if(paged){setPage(info.col);goToCol(info.col,false);}else{rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-rd.clientHeight*.25;setPage(pageOf(at.seg));}
+    rd.style.scrollBehavior=behavior;readingSeg=point.seg;return true;
+  }
+  function captureProgress(){
+    try{const point=annotationVisiblePoint();retainProgress(point);save(true);return true;}
+    catch(e){progressUnavailable=true;showProgress();return false;}
+  }
+  $("#finishBook").onclick=()=>{const end=progressEnd(segs);if(mode!=="text"||!end)return;progressGesture=false;retainProgress(end);placeProgress(end);save(true);};
 
   // ---------- local library and audio session store ----------
   const DB="inn-reader", STORE="session";
@@ -921,13 +1057,17 @@
   let libraryReady=null,librarySaved=false,shelfGeneration=0,shelfUrls=[];
   function ensureLibrary(){if(!libraryReady)libraryReady=library.migrate().catch(e=>{libraryReady=null;throw e;});return libraryReady;}
   function libraryMessage(message){$("#libraryStatus").textContent=message;}
-  function bookSavedStatus(saved,message){librarySaved=saved;$("#bookStatus").textContent=message||(saved?"Saved on this device":"Not saved on this device");}
+  function bookSavedStatus(saved,message){librarySaved=saved;annotationAvailability();$("#bookStatus").textContent=message||(saved?"Saved on this device":"Not saved on this device");}
   function queueLibrary(action){const result=sessionWriteQueue.catch(()=>{}).then(action);sessionWriteQueue=result.catch(()=>{});return result;}
   function saveBookPosition(){
-    const id=sourceIdentity,seg=Math.max(0,posSeg());if(!librarySaved)return;
-    queueLibrary(()=>library.position(id,seg)).then(ok=>{if(mode==="text"&&sourceIdentity===id&&!ok)bookSavedStatus(false,"No longer saved on this device");}).catch(()=>{
-      if(mode==="text"&&sourceIdentity===id)bookSavedStatus(false,"Latest place not saved; reopen from the library to retry");
-    });
+    const id=sourceIdentity,ctx=annotationSession,point=progressPosition&&{...progressPosition},generation=searchGeneration;
+    if(!librarySaved||mode!=="text"||!point||!progressPending)return;
+    const precise=progressPrecise&&annotationInstanceValid(ctx?.instance),value=precise?point:point.seg;
+    queueLibrary(()=>{if(mode!=="text"||sourceIdentity!==id||generation!==searchGeneration)throw new Error("STALE");return library.position(id,value,precise?ctx:null);}).then(ok=>{
+      if(mode!=="text"||sourceIdentity!==id||generation!==searchGeneration)return;
+      if(!ok){progressDirty=true;bookSavedStatus(false,"No longer saved on this device");}
+      else if(progressPosition?.seg===point.seg&&progressPosition?.offset===point.offset){progressDirty=!precise&&progressPrecise;progressPending=false;showProgress();}
+    }).catch(()=>{if(mode==="text"&&sourceIdentity===id&&generation===searchGeneration){progressDirty=true;showProgress();$("#bookStatus").textContent="Latest place not saved; reopen from the library to retry";}});
   }
   function releaseShelf(){shelfGeneration++;for(const url of shelfUrls)URL.revokeObjectURL(url);shelfUrls=[];clear($("#shelf"));}
   async function renderShelf(){
@@ -947,10 +1087,10 @@
         if(!valid)openButton.disabled=true;
         const detail=valid?r.format.toUpperCase()+" · Last read "+new Date(r.lastReadAt).toLocaleString()+(r.reimportStable?"":" · reimport creates a new copy"):"Unreadable record — remove it or import the source again";
         const info=el("div",{class:"book-info"},[openButton,el("small",{text:detail})]);
-        if(valid)info.appendChild(el("p",{class:"book-progress",text:libraryProgress(r)+"% read (approx.)",title:"Approximate reading progress from your saved place"}));
+        if(valid)info.appendChild(el("p",{class:"book-progress",text:progressLabel(r.doc.segments,r.position),title:"Approximate reading progress from your saved place"}));
         info.appendChild(el("button",{class:"chip",text:"Delete","data-action":"delete","aria-label":"Delete "+title,onclick:async()=>{
           if(!confirm('Delete "'+title+'" from this device?'))return;
-          try{await queueLibrary(()=>library.remove(r.identity));if(mode==="text"&&sourceIdentity===r.identity)bookSavedStatus(false,"No longer saved on this device");await renderShelf();await checkResume();}
+          try{await queueLibrary(()=>library.remove(r.identity));if(mode==="text"&&sourceIdentity===r.identity){admitSearchDocument();bookSavedStatus(false,"No longer saved on this device");}await renderShelf();await checkResume();}
           catch(e){libraryMessage("Deletion did not complete. Your saved books were kept. "+genericErrorMessage(e.message));}
         }}));
         $("#shelf").appendChild(el("article",{class:"book-card","data-identity":r.identity},[cover,info]));
@@ -962,7 +1102,7 @@
     flushSave();const token=ownedToken===null?++loadEpoch:ownedToken;++loadToken;
     try{await ensureLibrary();const r=await queueLibrary(()=>library.open(id,()=>token===loadEpoch));if(token!==loadEpoch)return;
       if(!r){libraryMessage("That book is no longer saved.");await renderShelf();await checkResume();return;}
-      openTextDoc(r.doc,r.identity,r.format,[],token,true,r.reimportStable,r.position,true);
+      openTextDoc(r.doc,r.identity,r.format,[],token,true,r.reimportStable,r.position,true,r);
     }catch(e){if(token===loadEpoch)libraryMessage("Could not open saved book. "+genericErrorMessage(e.message));}
   }
   $("#libraryBtn").onclick=()=>{
@@ -1101,6 +1241,7 @@
     return scrollTextAnchor(i) || {kind:"scroll",i,top:segEls[i] ? segEls[i].getBoundingClientRect().top-rd.getBoundingClientRect().top : null};
   }
   function restoreComfortAnchor(a){
+    if(mode==="text"&&progressPosition&&readerReady()){progressGesture=false;progressUnavailable=!placeProgress(progressPosition);showProgress();return;}
     if(!a || !readerReady()) return;
     const rd=$("#reader");
     if(paged){
@@ -1212,6 +1353,7 @@
   // ---------- transport ----------
   // The read->listen handoff: if you read ahead while paused, play continues from the reading place.
   function resumePlay(){
+    cancelSearchNavigation();
     if(mode==="text")return;
     if(readingSeg>=0 && segs[readingSeg] && readingSeg!==findSeg(audio.currentTime))
       audio.currentTime=segs[readingSeg].start+0.001;
@@ -1223,6 +1365,8 @@
   $("#fwd").onclick =()=>{ if(mode!=="text"){comfortSessionAnchor=null;audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+15); }};
   $("#prevChap").onclick=()=>skipChapter(-1);
   $("#nextChap").onclick=()=>skipChapter(1);
+  document.addEventListener("click",e=>{if(e.target.closest("#play,#back,#fwd,#prevChap,#nextChap,#follow,.seg,.chap"))cancelSearchNavigation();},true);
+  $("#seek").addEventListener("input",cancelSearchNavigation);
   const rates=[0.8,1,1.25,1.5,2], RATE_KEY="inn-reader-rate";
   let ri=(()=>{ const v=parseInt(storageGet(RATE_KEY),10); return (v>=0&&v<rates.length)?v:1; })();
   function applyRate(){ audio.playbackRate=rates[ri]; $("#rate").textContent=rates[ri]+"×";
@@ -1233,14 +1377,17 @@
       else if(segEls[curSeg]) segEls[curSeg].scrollIntoView({block:"center",behavior:"smooth"}); } };
   $("#seek").oninput=e=>{ if(mode!=="text"&&audio.duration){ comfortSessionAnchor=null; audio.currentTime=e.target.value/1000*audio.duration; } };
 
-  audio.addEventListener("play",()=>{ comfortSessionAnchor=null; if(mode==="text"){audio.pause();return;}$("#play").textContent="❚❚";
+  audio.addEventListener("play",()=>{ cancelSearchNavigation();comfortSessionAnchor=null; if(mode==="text"){audio.pause();return;}$("#play").textContent="❚❚";
     if("mediaSession" in navigator) navigator.mediaSession.playbackState="playing";
     acquireWake(); cancelAnimationFrame(rafId); rafId=requestAnimationFrame(tick); });
   audio.addEventListener("pause",()=>{ comfortSessionAnchor=null; if(mode==="text")return;$("#play").textContent="▶";
     if("mediaSession" in navigator) navigator.mediaSession.playbackState="paused";
+    if(searchOwner){searchOwner.pausePending=false;releaseWake();finishSearchNavigation(searchOwner);return;}
     readingSeg=-1; pausedAt=Date.now();  // fresh pause: no divergence until a post-pause reader gesture
     releaseWake(); save(); });
-  audio.addEventListener("seeked",()=>{ comfortSessionAnchor=null; if(mode==="text")return;const t=audio.currentTime; readingSeg=-1;  // explicit audio move
+  audio.addEventListener("seeked",()=>{ comfortSessionAnchor=null; if(mode==="text")return;
+    if(searchOwner){if(audio.currentTime===searchOwner.target){searchOwner.seekPending=false;finishSearchNavigation(searchOwner);return;}cancelSearchNavigation();}
+    const t=audio.currentTime; readingSeg=-1;  // explicit audio move
     setSeg(findSeg(t)); setWord(t); setChap(t);
     $("#cur").textContent=fmt(t); updatePosition(); });
   audio.addEventListener("seeking",()=>{ comfortSessionAnchor=null; });
@@ -1264,10 +1411,347 @@
   audio.addEventListener("error",()=>{ if(mode!=="text"&&audio.src) toast("Couldn't load that audio file."); });
   audio.addEventListener("ended",()=>{ if(mode!=="text"&&playlist && playlist.idx+1<playlist.tracks.length) nextTrack(); });
 
+  // LOCAL_SEARCH_BEGIN
+  // Search consumes source text incrementally; the only retained transform is
+  // the query-sized suffix needed for literal matching and source offsets.
+  function searchQuery(raw){
+    const trimmed=raw.trim(); let count=0, out="", space=false;
+    for(const cp of trimmed){
+      if(++count>256) throw new Error("Use at most 256 characters.");
+      if(/\s/u.test(cp)){space=true;continue;}
+      if(space){out+=" ";space=false;}
+      out+=cp.toLowerCase();
+    }
+    return out;
+  }
+  function searchCursor(query){
+    const failure=new Array(query.length).fill(0);
+    for(let i=1,j=0;i<query.length;i++){
+      while(j && query[i]!==query[j])j=failure[j-1];
+      if(query[i]===query[j])j++;
+      failure[i]=j;
+    }
+    return {query,failure,seg:0,offset:0,matched:0,units:0,
+      ring:new Array(query.length),whitespace:null,done:!query.length};
+  }
+  function cloneSearchCursor(c){
+    return Object.assign({},c,{ring:c.ring.slice(),
+      whitespace:c.whitespace?Object.assign({},c.whitespace):null});
+  }
+  function searchSlice(segments,c,maxHits=51){
+    const hits=[];let consumed=0,steps=0;
+    const emit=(text,start,end)=>{
+      for(let k=0;k<text.length;k++){
+        const slot=c.units%c.query.length;
+        c.ring[slot]={start,end,first:k===0,last:k===text.length-1};c.units++;
+        while(c.matched && text[k]!==c.query[c.matched])c.matched=c.failure[c.matched-1];
+        if(text[k]===c.query[c.matched])c.matched++;
+        if(c.matched===c.query.length){
+          const first=c.ring[(c.units-c.query.length)%c.query.length],last=c.ring[(c.units-1)%c.query.length];
+          if(first.first && last.last){
+            hits.push({seg:c.seg,start:first.start,end:last.end});c.matched=0;
+          }else c.matched=c.failure[c.matched-1];
+        }
+      }
+    };
+    while(!c.done && consumed<16384 && hits.length<maxHits && steps++<16384){
+      if(c.seg>=segments.length){c.done=true;break;}
+      const text=segments[c.seg].text;
+      if(c.offset>=text.length){
+        if(c.whitespace){emit(" ",c.whitespace.start,c.whitespace.end);c.whitespace=null;}
+        c.seg++;c.offset=0;c.matched=0;c.units=0;c.ring.fill(null);
+        if(c.seg>=segments.length)c.done=true;
+        continue;
+      }
+      const cp=String.fromCodePoint(text.codePointAt(c.offset));
+      if(consumed+cp.length>16384)break;
+      const start=c.offset,end=start+cp.length;
+      if(/\s/u.test(cp)){
+        if(c.whitespace)c.whitespace.end=end;else c.whitespace={start,end};
+        c.offset=end;consumed+=cp.length;
+      }else{
+        if(c.whitespace){
+          emit(" ",c.whitespace.start,c.whitespace.end);c.whitespace=null;
+          if(hits.length>=maxHits)break;
+        }
+        emit(cp.toLowerCase(),start,end);c.offset=end;consumed+=cp.length;
+      }
+    }
+    return {hits,consumed,done:c.done};
+  }
+  function searchExcerpt(text,start,end){
+    // Walk only the hit and a bounded neighborhood, never Array.from(book).
+    const previous=i=>i>1 && /[\uDC00-\uDFFF]/.test(text[i-1]) && /[\uD800-\uDBFF]/.test(text[i-2])?i-2:i-1;
+    const next=i=>i+String.fromCodePoint(text.codePointAt(i)).length;
+    let hitEnd=start,hitCount=0;
+    while(hitEnd<end && hitCount<118){hitEnd=next(hitEnd);hitCount++;}
+    let left=start,right=hitEnd,room=118-hitCount;
+    for(let n=0;n<Math.floor(room/2)&&left>0;n++)left=previous(left);
+    let used=hitCount;
+    for(let i=left;i<start;i=next(i))used++;
+    while(used<118&&right<text.length){right=next(right);used++;}
+    while(used<118&&left>0){left=previous(left);used++;}
+    return {before:text.slice(left,start),match:text.slice(start,Math.min(end,right)),
+      after:text.slice(Math.min(end,right),right),leading:left>0,trailing:right<text.length};
+  }
+  // LOCAL_SEARCH_END
+  // Search state belongs to admitted documents, never import attempts.
+  let searchGeneration=0, searchRun=0, searchOwner=null, searchPlain=-1;
+  let searchState={query:"",hits:[],pending:null,cursor:null,busy:false,message:"Enter text to search."};
+  function admitSearchDocument(){
+    ++searchGeneration;++searchRun;searchOwner=null;searchPlain=-1;resetAnnotations();
+    searchState={query:"",hits:[],pending:null,cursor:null,busy:false,message:"Enter text to search."};
+    $("#searchBtn").disabled=!segs.length;
+    if(sheetKind==="search")closeSheet();
+    if($("#searchQuery"))clear($("#sheet"));
+  }
+  function cancelSearchNavigation(){
+    searchOwner=null;
+    if(searchPlain>=0){
+      const i=searchPlain;searchPlain=-1;
+      if(mode!=="text" && curSeg===i){curSeg=-1;setSeg(i);}
+    }
+  }
+  function cancelSearchScan(){
+    ++searchRun;
+    if(searchState.busy){searchState.busy=false;searchState.message="Search paused; continue or search again.";}
+  }
+  function searchChapter(i){
+    let found=null;
+    for(const c of chapters){
+      if(Number.isInteger(c.seg)?c.seg<=i:c.start<=segs[i].start)found=c;
+    }
+    return found?found.title+" · Segment "+(i+1):"Segment "+(i+1);
+  }
+  function renderSearch(){
+    const typed=$("#searchQuery")?.value;
+    const sheet=$("#sheet");clear(sheet);
+    sheet.setAttribute("role","dialog");sheet.setAttribute("aria-modal","true");sheet.setAttribute("aria-labelledby","searchHeading");
+    sheet.appendChild(el("h2",{id:"searchHeading",text:"Search this book"}));
+    const input=el("input",{id:"searchQuery",type:"text",autocomplete:"off",spellcheck:"false"});input.value=typed??searchState.query;
+    const form=el("form",{},[el("label",{for:"searchQuery",text:"Literal phrase"}),input,el("button",{type:"submit",text:"Search"})]);
+    form.onsubmit=e=>{e.preventDefault();startSearch(input.value);};sheet.appendChild(form);
+    sheet.appendChild(el("p",{id:"searchStatus",role:"status","aria-live":"polite",text:searchState.message}));
+    const list=el("div",{class:"clist",id:"searchResults"});
+    for(const hit of searchState.hits){
+      const excerpt=searchExcerpt(segs[hit.seg].text,hit.start,hit.end);
+      const button=el("button",{type:"button"},[
+        el("span",{class:"ct",text:searchChapter(hit.seg)}),
+        excerpt.leading?"…":"",excerpt.before,el("mark",{text:excerpt.match}),excerpt.after,excerpt.trailing?"…":""]);
+      button.onclick=()=>navigateSearchHit(hit);list.appendChild(button);
+    }
+    sheet.appendChild(list);
+    if(searchState.cursor && (!searchState.cursor.done||searchState.pending) && searchState.hits.length<500){
+      const more=el("button",{type:"button",id:"searchMore",text:"Load more"});more.onclick=()=>continueSearch();sheet.appendChild(more);
+    }
+    sheet.appendChild(el("button",{type:"button",id:"searchClose",text:"Close",onclick:closeSheet}));
+  }
+  function publishSearch(){if(sheetKind==="search"){
+    const active=document.activeElement,id=active?.id,inside=$("#sheet").contains(active);
+    renderSearch();if(inside)(id&&document.getElementById(id)||$("#searchQuery")).focus();
+  }}
+  function startSearch(raw){
+    cancelSearchScan();
+    searchState={query:raw,hits:[],pending:null,cursor:null,busy:false,message:"Enter text to search."};
+    try{
+      const query=searchQuery(raw);
+      if(!query){publishSearch();$("#searchQuery")?.focus();return;}
+      searchState.cursor=searchCursor(query);continueSearch();
+    }catch(e){searchState.message=e.message==="Use at most 256 characters."?e.message:"Unable to search. Try again.";publishSearch();$("#searchQuery")?.focus();}
+  }
+  async function continueSearch(){
+    if(searchState.busy||!searchState.cursor||(searchState.cursor.done&&!searchState.pending)||searchState.hits.length>=500)return;
+    const state=searchState,run=++searchRun,generation=searchGeneration,source=segs;
+    const cursor=cloneSearchCursor(state.cursor),batch=state.pending?[state.pending]:[];
+    const limit=Math.min(50,500-state.hits.length),current=()=>run===searchRun&&generation===searchGeneration&&state===searchState&&sheetKind==="search";
+    state.busy=true;state.message="Searching…";publishSearch();
+    try{
+      while(!cursor.done&&batch.length<=limit){
+        await new Promise(resolve=>setTimeout(resolve,0));if(!current())return;
+        const result=searchSlice(source,cursor,limit+1-batch.length);batch.push(...result.hits);
+        if(batch.length>limit)break;
+      }
+      if(!current())return;
+      state.hits.push(...batch.slice(0,limit).map(hit=>Object.assign(hit,{generation})));
+      state.pending=batch.length>limit?Object.assign(batch[limit],{generation}):null;
+      state.cursor=cursor;state.busy=false;
+      state.message=state.hits.length===500&&state.pending?"First 500 matches; refine your search.":
+        cursor.done&&!state.pending?state.hits.length+" matches.":"At least "+(state.hits.length+1)+" matches.";
+      if(state.hits.length===500&&state.pending)state.pending=null;
+      publishSearch();
+    }catch(e){
+      if(!current())return;state.busy=false;state.message="Unable to search. Try again.";publishSearch();
+    }
+  }
+  function validSearchHit(hit){
+    if(hit.generation!==searchGeneration||!searchState.hits.includes(hit)||!segs[hit.seg])return false;
+    const text=segs[hit.seg].text;
+    const boundary=n=>n===0||n===text.length||!(/[\uDC00-\uDFFF]/.test(text[n])&&/[\uD800-\uDBFF]/.test(text[n-1]));
+    return Number.isInteger(hit.start)&&Number.isInteger(hit.end)&&hit.start>=0&&hit.start<hit.end&&hit.end<=text.length&&boundary(hit.start)&&boundary(hit.end);
+  }
+  function finishSearchNavigation(owner){
+    if(owner!==searchOwner||!validSearchHit(owner.hit)||owner.pausePending||owner.seekPending)return;
+    const hit=owner.hit,p=segEls[hit.seg],rd=$("#reader");
+    try{
+      if(!p)throw new Error();
+      p.textContent=segs[hit.seg].text;if(mode==="text")renderAnnotationSegment(hit.seg);
+      if(paged)buildPagesPaged();
+      const nodes=segmentTextNodes(p),info=paged?rangeColumn(p,nodes,hit.start):rangeGeometry(p,nodes,hit.start);
+      if(!info)throw new Error();
+      if(curSeg>=0&&segEls[curSeg]&&curSeg!==hit.seg){segEls[curSeg].classList.remove("cur");segEls[curSeg].textContent=segs[curSeg].text;if(mode==="text")renderAnnotationSegment(curSeg);}
+      curSeg=hit.seg;curWordEls=null;searchPlain=hit.seg;p.classList.add("cur");p.classList.remove("read");
+      readingSeg=hit.seg;setChap(segs[hit.seg].start);
+      if(paged){setPage(info.col);goToCol(info.col,false);}
+      else{const old=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-12;rd.style.scrollBehavior=old;setPage(pageOf(hit.seg));}
+      pausedAt=Date.now();lastUserInput=0;owner.complete=true;
+      if(mode==="text"){progressGesture=false;retainProgress({seg:hit.seg,offset:hit.start});}
+      else{const t=audio.currentTime;$("#cur").textContent=fmt(t);$("#seek").value=audio.duration?t/audio.duration*1000:0;updatePosition();}
+      save(true);
+    }catch(e){searchOwner=null;toast("Unable to show this match");}
+  }
+  function navigateSearchHit(hit){
+    if(!validSearchHit(hit)){toast("Unable to show this match");return;}
+    cancelSearchNavigation();
+    const target=segs[hit.seg].start;
+    const playable=mode!=="text"&&!!(audio.currentSrc||audio.getAttribute("src"))&&Number.isFinite(audio.duration)&&target>=0&&target<=audio.duration;
+    const owner={hit,pausePending:!audio.paused,seekPending:playable&&audio.currentTime!==target,target,complete:false};
+    searchOwner=owner;closeSheet();cancelAnimationFrame(rafId);rafId=null;
+    try{
+      if(owner.pausePending)audio.pause();
+      if(owner.seekPending)audio.currentTime=target;
+      finishSearchNavigation(owner);
+    }catch(e){searchOwner=null;audio.pause();toast("Unable to show this match");}
+  }
+  function searchSheetKey(e){
+    if(sheetKind!=="search")return false;
+    if(e.key==="Escape"){e.preventDefault();closeSheet();}
+    else if(e.key==="Tab"){
+      const controls=Array.from($("#sheet").querySelectorAll("input,button")).filter(n=>!n.disabled);
+      const first=controls[0],last=controls[controls.length-1];
+      if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+      else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+    }
+    return true;
+  }
+
+
+  let annotationSession=null,annotationItems=[],annotationProblem="",annotationBusy=false,annotationEditor=null,annotationCapture=null,annotationRefresh=0;
+  function annotationMessage(code){return ({RANGE:"Select only complete book text; selections containing headings or controls are unavailable.",DATA:"Annotations unavailable: saved annotation data is unreadable.",LIMIT:"Not saved: use at most 1000 annotations, 120 label characters and 8192 note units.",CONFLICT:"Not saved: this annotation changed. Reload annotations, then open a new edit. Your unsaved text is kept.",STALE:"Annotations unavailable: reopen this saved book before trying again.",SOURCE:"Annotations unavailable: the saved book text changed. Reopen the book.",STORAGE:"Not saved: storage did not complete. Your unsaved text is kept."})[code]||"Not saved: storage did not complete. Your unsaved text is kept.";}
+  function annotationCurrent(ctx){return !!ctx&&ctx===annotationSession&&ctx.generation===searchGeneration&&mode==="text"&&librarySaved&&ctx.identity===sourceIdentity;}
+  function annotationAvailability(){
+    const reason=mode!=="text"?"Annotations require a saved text-library book.":!librarySaved?"Annotations unavailable: this book is not saved on this device.":!annotationInstanceValid(annotationSession?.instance)?(annotationSession?.instancePresent?"Annotations unavailable: saved annotation data is unreadable.":"Annotations unavailable: reopen with browser random-byte support."):"";
+    $("#annotationsBtn").disabled=!!reason;$("#annotationsBtn").title=reason||"Bookmarks, highlights and notes";
+    const status=$("#annotationAvailability");status.textContent=reason;status.hidden=!reason||!readerReady();return reason;
+  }
+  function resetAnnotations(){
+    ++annotationRefresh;annotationSession=null;annotationItems=[];annotationProblem="";annotationBusy=false;annotationEditor=null;annotationCapture=null;
+    if(sheetKind==="annotations")closeSheet();
+    annotationAvailability();
+  }
+  function bindAnnotations(record){
+    const ctx={identity:sourceIdentity,instance:record?.annotationInstance,instancePresent:!!record&&Object.hasOwn(record,"annotationInstance"),generation:searchGeneration,source:segs};
+    ctx.current=()=>annotationCurrent(ctx);annotationSession=ctx;annotationAvailability();refreshAnnotations();
+  }
+  function renderAnnotationSegment(i){
+    const p=segEls[i];if(!p||mode!=="text")return;
+    const text=segs[i].text,intervals=annotationIntervals(annotationItems,i,text.length);clear(p);let at=0;
+    for(const [a,b] of intervals){if(at<a)p.appendChild(document.createTextNode(text.slice(at,a)));p.appendChild(el("mark",{class:"annotation-mark",text:text.slice(a,b)}));at=b;}
+    if(at<text.length||!text.length)p.appendChild(document.createTextNode(text.slice(at)));
+  }
+  function renderAnnotationMarks(){if(mode==="text")for(let i=0;i<segs.length;i++)renderAnnotationSegment(i);}
+  async function refreshAnnotations(){
+    const ctx=annotationSession,run=++annotationRefresh;if(!annotationCurrent(ctx)||!annotationInstanceValid(ctx.instance))return;
+    try{const data=await library.annotations(ctx);if(!annotationCurrent(ctx)||run!==annotationRefresh)return;const changed=JSON.stringify(data.items)!==JSON.stringify(annotationItems);annotationItems=data.items;annotationProblem="";if(changed)renderAnnotationMarks();}
+    catch(e){if(!annotationCurrent(ctx)||run!==annotationRefresh)return;annotationProblem=annotationMessage(e.message);if(["DATA","STALE","SOURCE"].includes(e.message)){annotationItems=[];renderAnnotationMarks();}}
+    if(sheetKind==="annotations"&&!annotationEditor)renderAnnotations();
+  }
+  function annotationSelected(){
+    const selection=getSelection();if(!selection||!selection.rangeCount||selection.isCollapsed)return null;
+    const range=selection.getRangeAt(0),rd=$("#reader");if(!rd.contains(range.startContainer)||!rd.contains(range.endContainer))throw new Error("RANGE");
+    const selected=[];
+    for(let i=0;i<segs.length;i++){
+      const p=segEls[i];if(!range.intersectsNode(p))continue;const nodes=segmentTextNodes(p);
+      if(nodes.map(n=>n.nodeValue).join("")!==segs[i].text)throw new Error("RANGE");
+      let base=0;
+      for(const n of nodes){
+        if(range.comparePoint(n,0)===1||range.comparePoint(n,n.nodeValue.length)===-1){base+=n.nodeValue.length;continue;}
+        const a=range.startContainer===n?range.startOffset:0,b=range.endContainer===n?range.endOffset:n.nodeValue.length;
+        if(a<b)selected.push({seg:i,start:base+a,end:base+b,text:n.nodeValue.slice(a,b)});base+=n.nodeValue.length;
+      }
+    }
+    if(!selected.length||selected.map(x=>x.text).join("")!==range.toString())throw new Error("RANGE");
+    const first=selected[0],last=selected.at(-1);return annotationCanonical(segs,{seg:first.seg,offset:first.start},{seg:last.seg,offset:last.end});
+  }
+  function annotationVisiblePoint(){
+    const anchor=comfortAnchor();if(!anchor||!["text","scrollText"].includes(anchor.kind))throw new Error("RANGE");
+    const text=segs[anchor.i]?.text;if(typeof text!=="string")throw new Error("RANGE");let offset=anchor.offset;
+    if(!annotationBoundary(text,offset))offset--;const point={seg:anchor.i,offset};if(!annotationPoint(segs,point,true))throw new Error("RANGE");
+    const nodes=segmentTextNodes(segEls[point.seg]);if(nodes.map(n=>n.nodeValue).join("")!==text)throw new Error("RANGE");
+    const info=rangeGeometry(segEls[point.seg],nodes,offset),r=$("#reader").getBoundingClientRect();
+    if(!info||info.rect.bottom<=r.top||info.rect.top>=r.bottom||info.rect.right<=r.left||info.rect.left>=r.right)throw new Error("RANGE");return point;
+  }
+  function captureAnnotations(){
+    try{const range=annotationSelected();return {ctx:annotationSession,range,point:range?range.start:annotationVisiblePoint(),error:""};}
+    catch(e){return {ctx:annotationSession,range:null,point:null,error:annotationMessage("RANGE")};}
+  }
+  function annotationExcerpt(item){let out="",room=120;for(let i=item.start.seg;i<segs.length&&room>0;i++){if(item.kind==="highlight"&&i>item.end.seg)break;const end=item.kind==="highlight"?(i>item.end.seg?0:i===item.end.seg?item.end.offset:segs[i].text.length):segs[i].text.length;if(i>item.start.seg&&item.kind!=="highlight")break;for(const cp of segs[i].text.slice(i===item.start.seg?item.start.offset:0,end)){if(!room--)break;out+=cp;}}return out;}
+  function annotationForm(kind,item=null,focusNote=false){
+    const ctx=annotationSession,capture=annotationCapture;
+    if(annotationBusy||annotationProblem||!annotationCurrent(ctx))return;
+    if(!item&&(capture?.ctx!==ctx||capture?.error||!capture?.point||(kind==="highlight"&&!capture.range))){annotationProblem=capture?.error||"Select book text before choosing Highlight.";renderAnnotations();return;}
+    annotationEditor={ctx,op:item?{action:"edit",id:item.id,revision:item.revision}:{action:"create",kind,start:kind==="highlight"?capture.range.start:capture.point,...(kind==="highlight"?{end:capture.range.end}:{})},label:item?.label||"",note:item?.note||""};renderAnnotations();$(focusNote?"#annotationNote":"#annotationLabel").focus();
+  }
+  function annotationStatus(message){const status=$("#annotationStatus");if(status)status.textContent=message;}
+  async function mutateAnnotation(op,editor=null){
+    const ctx=editor?.ctx||annotationSession;if(annotationBusy||!annotationCurrent(ctx)){annotationStatus(annotationMessage("STALE"));return;}
+    annotationBusy=true;for(const n of $("#sheet").querySelectorAll("#annotationLabel,#annotationNote"))n.disabled=true;$("#annotationSave")?.setAttribute("disabled","");for(const n of $("#sheet").querySelectorAll("[data-annotation-action]"))n.disabled=true;annotationStatus("Saving…");
+    try{const data=await queueLibrary(()=>library.annotations(ctx,op));if(!annotationCurrent(ctx))return;annotationItems=data.items;annotationProblem="";annotationEditor=null;renderAnnotationMarks();if(sheetKind==="annotations"){renderAnnotations();annotationStatus("Saved on this device.");}}
+    catch(e){if(annotationCurrent(ctx)){if(editor){editor.label=$("#annotationLabel")?.value??editor.label;editor.note=$("#annotationNote")?.value??editor.note;}annotationStatus(annotationMessage(e.message));}}
+    finally{if(annotationCurrent(ctx)){annotationBusy=false;for(const n of $("#sheet").querySelectorAll("#annotationLabel,#annotationNote"))n.disabled=false;$("#annotationSave")?.removeAttribute("disabled");for(const n of $("#sheet").querySelectorAll("[data-annotation-action]"))n.disabled=false;if(sheetKind==="annotations"&&!annotationEditor)$("#annotationBookmark")?.focus();}}
+  }
+  async function navigateAnnotation(item){
+    const ctx=annotationSession;if(!annotationCurrent(ctx))return;
+    try{const latest=await library.annotations(ctx);if(!annotationCurrent(ctx))return;const fresh=latest.items.find(x=>x.id===item.id&&x.revision===item.revision);if(!fresh)throw new Error("CONFLICT");
+      annotationItems=latest.items;renderAnnotationMarks();const p=segEls[fresh.start.seg],nodes=segmentTextNodes(p);if(paged)buildPagesPaged();const info=paged?rangeColumn(p,nodes,fresh.start.offset):rangeGeometry(p,nodes,fresh.start.offset);if(!info)throw new Error("GEOMETRY");
+      closeSheet();cancelSearchNavigation();curSeg=fresh.start.seg;readingSeg=curSeg;curWordEls=null;for(const e of segEls)e.classList.remove("cur");p.classList.add("cur");setChap(segs[curSeg].start);
+      const rd=$("#reader");if(paged){setPage(info.col);goToCol(info.col,false);}else{const old=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-12;rd.style.scrollBehavior=old;setPage(pageOf(curSeg));}progressGesture=false;retainProgress(fresh.start);save(true);
+    }catch(e){if(annotationCurrent(ctx))annotationStatus(e.message==="GEOMETRY"?"Unable to show this annotation.":annotationMessage(e.message));}
+  }
+  function renderAnnotations(){
+    const sheet=$("#sheet");clear(sheet);sheet.setAttribute("role","dialog");sheet.setAttribute("aria-modal","true");sheet.setAttribute("aria-labelledby","annotationHeading");sheet.appendChild(el("h2",{id:"annotationHeading",text:"Bookmarks, highlights and notes"}));
+    sheet.appendChild(el("p",{id:"annotationStatus",role:"status","aria-live":"polite",text:annotationProblem||"Annotations are saved only on this device."}));
+    const editor=annotationEditor;
+    if(editor){
+      const label=el("input",{id:"annotationLabel",type:"text",autocomplete:"off"}),note=el("textarea",{id:"annotationNote",rows:"5"});label.value=editor.label;note.value=editor.note;
+      label.oninput=()=>editor.label=label.value;note.oninput=()=>editor.note=note.value;
+      const form=el("form",{},[el("label",{for:"annotationLabel",text:"Label (optional)"}),label,el("label",{for:"annotationNote",text:"Note (optional)"}),note,el("button",{id:"annotationSave",type:"submit",text:"Save"}),el("button",{type:"button",text:"Cancel",onclick:()=>{if(annotationBusy)return;annotationEditor=null;renderAnnotations();}})]);
+      form.onsubmit=e=>{e.preventDefault();editor.label=label.value;editor.note=note.value;mutateAnnotation({...editor.op,label:label.value,note:note.value},editor);};sheet.appendChild(form);
+    }else{
+      for(const [label,kind,id] of [["Add bookmark","bookmark","annotationBookmark"],["Highlight selection","highlight","annotationHighlight"],["Highlight + note","highlight","annotationHighlightNote"]]){const b=el("button",{type:"button",id,text:label,"data-annotation-action":"create",onclick:()=>annotationForm(kind,null,id==="annotationHighlightNote")});b.disabled=!!annotationProblem||annotationBusy;sheet.appendChild(b);}
+      if(!annotationItems.length)sheet.appendChild(el("p",{text:"No annotations in this book."}));
+      const list=el("div",{id:"annotationList",class:"clist"});
+      for(const item of annotationItems){const row=el("article",{data:{annotationId:String(item.id)}},[el("p",{text:(item.label||item.kind)+" · Segment "+(item.start.seg+1)}),el("blockquote",{text:annotationExcerpt(item)}),el("p",{class:"annotation-note",text:item.note})]);
+        for(const [label,action] of [["Navigate",()=>navigateAnnotation(item)],["Edit",()=>annotationForm(item.kind,item)],["Delete",()=>{if(confirm('Delete '+(item.label||item.kind)+' annotation #'+item.id+'?'))mutateAnnotation({action:"delete",id:item.id,revision:item.revision});}]])row.appendChild(el("button",{type:"button",text:label,"aria-label":label+" "+(item.label||item.kind)+" annotation "+item.id,"data-annotation-action":label,onclick:action}));list.appendChild(row);
+      }sheet.appendChild(list);
+    }
+    sheet.appendChild(el("button",{type:"button",id:"annotationReload",text:"Reload annotations",onclick:()=>refreshAnnotations()}));
+    sheet.appendChild(el("button",{type:"button",id:"annotationClose",text:editor?"Cancel and close":"Close",onclick:()=>{if(!annotationBusy)closeSheet();}}));
+  }
+  function annotationSheetKey(e){
+    if(sheetKind!=="annotations")return false;
+    if(e.key==="Escape"){e.preventDefault();if(!annotationBusy)closeSheet();}
+    else if(e.key==="Tab"){const controls=Array.from($("#sheet").querySelectorAll("input,textarea,button")).filter(x=>!x.disabled),first=controls[0],last=controls.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}return true;
+  }
+  $("#annotationsBtn").addEventListener("pointerdown",()=>{annotationCapture=captureAnnotations();});
+  $("#annotationsBtn").onclick=()=>{annotationCapture ||= captureAnnotations();openSheet("annotations");refreshAnnotations();};
+  window.addEventListener("focus",()=>{if(annotationSession)refreshAnnotations();});
   // ---------- bottom sheet ----------
-  function openSheet(kind){ if(kind==="settings") comfortSessionAnchor=null; sheetKind=kind; (kind==="chapters"?renderChapters:renderSettings)();
-    $("#scrim").classList.add("on"); $("#sheet").classList.add("on"); }
-  function closeSheet(){ comfortSessionAnchor=null; sheetKind=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on"); }
+  function openSheet(kind){ if(sheetKind==="search")cancelSearchScan();if(kind==="settings") comfortSessionAnchor=null; sheetKind=kind;
+    if(kind!=="search"&&kind!=="annotations"){for(const key of ["role","aria-modal","aria-labelledby"])$("#sheet").removeAttribute(key);}
+    (kind==="annotations"?renderAnnotations:kind==="search"?renderSearch:kind==="chapters"?renderChapters:renderSettings)();
+    $("#scrim").classList.add("on"); $("#sheet").classList.add("on");if(kind==="search")$("#searchQuery").focus();if(kind==="annotations")$("#annotationBookmark,#annotationLabel,#annotationClose")?.focus(); }
+  function closeSheet(){if(sheetKind==="annotations"&&annotationBusy)return; const annotations=sheetKind==="annotations";const search=sheetKind==="search";if(search)cancelSearchScan();comfortSessionAnchor=null; sheetKind=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on");if(search)$("#searchBtn").focus();if(annotations){annotationEditor=null;annotationCapture=null;$("#annotationsBtn").focus();} }
+  $("#searchBtn").onclick=()=>{if(segs.length)openSheet("search");};
   $("#scrim").onclick=closeSheet;
   $("#chaptersBtn").onclick=()=>openSheet("chapters");
   $("#settingsBtn").onclick=()=>openSheet("settings");
@@ -1327,9 +1811,12 @@
 
   // ---------- keyboard (desktop) ----------
   document.addEventListener("keydown",e=>{
+    if(searchSheetKey(e)||annotationSheetKey(e))return;
     if(!$("#reader").classList.contains("on")) return;
     const tag=(e.target.tagName||"").toLowerCase();
     if(tag==="input"||tag==="textarea") return;
+    if(mode==="text"&&tag==="button"&&e.key===" ")return;
+    if(mode==="text"&&["ArrowUp","ArrowDown","Home","End"].includes(e.key)&&$("#reader").classList.contains("on"))progressGesture=true;
     if(e.key===" "){e.preventDefault();if(mode!=="text")$("#play").click();}
     else if(e.key==="ArrowLeft"){e.preventDefault();if(e.shiftKey)skipChapter(-1);else if(mode!=="text")$("#back").click();}
     else if(e.key==="ArrowRight"){e.preventDefault();if(e.shiftKey)skipChapter(1);else if(mode!=="text")$("#fwd").click();}
@@ -1409,7 +1896,7 @@
       mode="audio";sourceIdentity="";currentFormat="";positionReady=true;
       doc=d; isDemo=false; pendingAudioFile=t.audioFile||null;
       pendingSeek=Math.max(0, seekT||0); pendingAutoplay=!!autoplay;
-      build(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
+      build(); admitSearchDocument(); curSeg=-1; curChap=-2; readingSeg=-1;   // -2 (not -1) so setChap always re-runs, even on chapterless tracks
       if(curObjUrl){ URL.revokeObjectURL(curObjUrl); curObjUrl=null; }   // free the previous track's blob URL
       setSeg(0); setChap(0);
       return trackAudioSrc(t).then(src=>{ if(token===loadToken&&epoch===loadEpoch&&mode!=="text")audio.src=src; });  // -> loadedmetadata seeks/autoplays
@@ -1463,12 +1950,14 @@
 
   function clearMediaSession(){if(!("mediaSession" in navigator))return;for(const a of ["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"])try{navigator.mediaSession.setActionHandler(a,null);}catch(e){}try{navigator.mediaSession.setPositionState();}catch(e){}try{navigator.mediaSession.playbackState="none";}catch(e){}try{navigator.mediaSession.metadata=null;}catch(e){}}
   function teardownAudioForText(){++loadToken;pendingSeek=0;pendingAutoplay=false;sleepMode="off";sleepAt=0;sleepChapterEnd=Infinity;cancelAnimationFrame(rafId);rafId=null;audio.pause();releaseWake();clearMediaSession();if(curObjUrl){URL.revokeObjectURL(curObjUrl);curObjUrl=null;}if(singleAudioObjUrl){URL.revokeObjectURL(singleAudioObjUrl);singleAudioObjUrl=null;}audio.removeAttribute("src");try{audio.load();}catch(e){}haveAudio=false;haveSync=false;$("#audioCk").textContent="○";$("#syncCk").textContent="○";$("#startBtn").style.display="none";}
-  function openTextDoc(nextDoc,identity,format,warnings,token,restored,identityStable=true,position=null,saved=false){
+  function openTextDoc(nextDoc,identity,format,warnings,token,restored,identityStable=true,position=null,saved=false,annotationRecord=null){
     const committed=commitGenericDoc(nextDoc,"generic "+format,token,()=>loadEpoch,()=>{
       mode="text";sourceIdentity=identity;sourceIdentityStable=identityStable;currentFormat=format;positionReady=false;
       playlist=null;dbxBook=null;isDemo=false;pendingAudioFile=null;teardownAudioForText();doc=nextDoc;
-      curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();bookSavedStatus(saved);showReaderUI();
+      curSeg=-1;curChap=-2;readingSeg=-1;pendingReadSeg=-1;build();admitSearchDocument();bookSavedStatus(saved);showReaderUI();
       navigateTextSeg(genericRestoreSeg(position?.seg,segs.length),false,false);positionReady=true;lastSave=0;
+      if(saved)bindAnnotations(annotationRecord);
+      const restoredPoint=progressRestore(segs,position);progressDirty=false;progressGesture=false;retainProgress(restoredPoint.point,restoredPoint.precise,false);progressUnavailable=restoredPoint.precise&&!placeProgress(restoredPoint.point);showProgress();
       bookSavedStatus(saved);
     });
     if(!committed)return false;
@@ -1486,13 +1975,13 @@
       let record=null;
       try{await ensureLibrary();current();const now=Date.now();record=await queueLibrary(()=>library.admit({version:1,identity:identity.identity,format:result.format,reimportStable:identity.stable,doc:result.doc,cover:result.cover,importedAt:now,lastReadAt:now,position:{seg:0}},()=>token===loadEpoch));}
       catch(err){current();libraryMessage("Import not saved. Existing books were kept. "+genericErrorMessage(err.message));}
-      current();openTextDoc(result.doc,identity.identity,result.format,result.warnings,token,false,identity.stable,record?.position||{seg:legacyPosition(identity.identity)},!!record);
+      current();openTextDoc(result.doc,identity.identity,result.format,result.warnings,token,false,identity.stable,record?.position||{seg:legacyPosition(identity.identity)},!!record,record);
     }catch(err){if(token===loadEpoch)alert("This file can't be opened ("+((err&&err.code)||"IMPORT")+"):\n\n"+genericErrorMessage(err?.message||err));}
     finally{if(token===loadEpoch){small.textContent=".txt, .md, .markdown, or EPUB 3";e.target.value="";}}
   });
 
   applyComfortCss();
-  function showReaderUI(){ comfortSessionAnchor=null;releaseShelf();if(mode!=="text")$("#bookStatus").textContent="";
+  function showReaderUI(){ comfortSessionAnchor=null;if(mode!=="text"){$("#progressStatus").hidden=true;$("#finishBook").hidden=true;}releaseShelf();if(mode!=="text")$("#bookStatus").textContent="";
     applyComfortCss();
     applyFont(fontPx()); if(mode!=="text"){applyRate();setupMediaSession();}
     $("#load").style.display="none";
@@ -1503,7 +1992,7 @@
     const bad=validateDoc(doc, isDemo?"demo data":"this read-along file");
     if(bad){ alert("This read-along file can't be played:\n\n"+bad); return; }
     mode="audio";sourceIdentity="";currentFormat="";positionReady=true;playlist=null; dbxBook=null;
-    build(); showReaderUI(); updateMetadata();
+    build(); admitSearchDocument(); showReaderUI(); updateMetadata();
     setSeg(0); setChap(0);
     saveSession();
   }

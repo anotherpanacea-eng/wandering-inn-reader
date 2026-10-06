@@ -254,7 +254,10 @@ one command, no network or device needed. Run it before opening a PR. What it co
 - `node --test tests/test_generic_ingest.mjs` — the shipped generic-ingest block’s
   decoding, archive, package, projection, resource-bound, identity, and refusal suite.
   Node is required for a green gate; absence is a failure, not a skip.
-- `python3 tools/run_node_tests.py ...` is the gate wrapper for both Node suites. It
+- `node --test tests/test_search.mjs` — the shipped local-search literal matching,
+  complete source-span, bounded scan, resumable result-limit, and excerpt suite.
+- `node --test tests/test_annotations.mjs` — local annotation source ranges, malformed-data refusals, monotonic edit/delete IDs, limits and overlap coverage.
+- `python3 tools/run_node_tests.py ...` is the gate wrapper for all Node suites. It
   requests TAP output, preserves the Node exit status, and additionally refuses any
   case reported with `# SKIP`; `tests/test_node_gate.py` plants a skip to prove that
   fail-closed behavior.
@@ -277,3 +280,5 @@ Beyond `check.sh` (can't be automated here):
 - Forced alignment against real audio needs the operator's machine (aeneas or torch
   installed) — by definition untested in-session; say so.
 </content>
+
+Phase3C source progress: run `python3 tools/run_node_tests.py tests/test_progress.mjs` with zero skips as part of the canonical local gate.

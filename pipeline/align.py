@@ -41,7 +41,7 @@ def frag_text(fr):
     return (fr.get("text") or "").strip()
 
 def to_segments(sync):
-    frags = sync.get("fragments", sync if isinstance(sync, list) else [])
+    frags = sync if isinstance(sync, list) else sync.get("fragments", [])
     segs = []
     for i, fr in enumerate(frags):
         txt = frag_text(fr)

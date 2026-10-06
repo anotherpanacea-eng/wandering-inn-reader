@@ -210,6 +210,8 @@ def _audio_by_no(audio_glob):
     for p in glob.glob(audio_glob):
         n = track_no(p)
         if n is not None:
+            if n in by:
+                sys.exit(f"ambiguous audio track {n}: {by[n]} and {p}")
             by[n] = p
     return by
 
@@ -280,6 +282,13 @@ def units_from_dir(align_dir, audio_glob=None, manifest=None, units_json=None):
         files = sorted(glob.glob(os.path.join(align_dir, "chap*.json")))
     if not files:
         sys.exit(f"no align*.json / chap*.json in {align_dir}")
+    seen = {}
+    for fp in files:
+        number = track_no(fp)
+        if number is not None:
+            if number in seen:
+                sys.exit(f"ambiguous alignment index {number}: {seen[number]} and {fp}")
+            seen[number] = fp
     by_no = _audio_by_no(audio_glob) if audio_glob else {}
     man_min = _load_manifest_minutes(manifest) if manifest else {}
     unit_min = _load_units_minutes(units_json) if units_json else {}
