@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>Local search acceptance harness</title>
+<h1>Local search acceptance harness</h1>
+<p>Serve this checkout locally with Python's standard-library HTTP server, then open this page. It drives the actual player in the iframe using invented text. No data leaves this local origin. Search recording does not start audio.</p>
+<button id="seed">Load invented book</button><button id="large">Load large invented book</button><pre id="status" role="status"></pre>
+<p>Try <b>needle</b>: choose its later occurrence in scroll and paged modes. Try <b>repeat</b>: verify50 per batch, Load more and the500 cap. Check Escape returns focus, Tab stays within Search, an unfinished scan can close/reopen, and a failed import preserves results. Change font/mode before choosing a retained result.</p>
+<iframe src="../index.html" title="Actual reader" style="width:100%;height:750px;border:1px solid"></iframe>
+<script>
+const frame=document.querySelector('iframe');
+function seed(large){try{const input=frame.contentDocument.querySelector('#genericIn');const file=new File(['Opening invented paragraph.\n\n'+(large?Array.from({length:20},()=> 'filler '.repeat(9000)).join('\n\n'):'filler '.repeat(1800))+' distinctive needle.\n\n'+'repeat '.repeat(600)],'Invented.txt',{type:'text/plain'});const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#status').textContent='Invented input submitted; use Search in the player.';}catch(e){document.querySelector('#status').textContent='Use a local HTTP origin so the iframe has same-origin access.';}}
+document.querySelector('#seed').onclick=()=>seed(false);document.querySelector('#large').onclick=()=>seed(true);
+</script>
