@@ -22,7 +22,7 @@ Each phase produces the existing data contract and is its own `spec → review �
 
 ## Phases
 
-Current disposition checked 2026-10-04 against main `43558c4`. Phases 0–2 are
+Current disposition checked 2026-10-07 against main `21c9151`. Phases 0–3 are
 landed; the notes below identify their bounded shipped behavior. This is a
 repository-state reconciliation, not a new browser or device qualification.
 
@@ -31,7 +31,7 @@ repository-state reconciliation, not a new browser or device qualification.
 | 0 | Generic path (EPUB/TXT/MD ingest, text-only) | [#28](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/28) | Landed in [train #40](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/40), `9693ebd` |
 | 1 | Library (multi-book, IndexedDB) | [#29](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/29) | Landed in [train #49](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/49), `43558c4` |
 | 2 | Reading comfort (typography & themes) | [#30](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/30) | Landed in [train #42](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/42), `85408b2` |
-| 3 | Wayfinding (search, bookmarks, highlights, progress) | [#31](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/31) | Open; search, annotation and progress contracts/builds are unmerged drafts |
+| 3 | Wayfinding (search, bookmarks, highlights, progress) | [#31](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/31) | Landed in [train #68](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/68), `21c9151` |
 | 4 | AI / generated voice (TTS streaming) | [#32](https://github.com/anotherpanacea-eng/wandering-inn-reader/issues/32) | Open; owner decision required before implementation |
 
 ### Phase 0 — Generic path: landed
@@ -52,8 +52,8 @@ The IndexedDB saved-book library has a shelf, covers, import/delete and independ
 per-book segment resume, including migration of the old single-document position.
 [Feature #45](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/45)
 landed through train #49. See [the library contract](library-phase1.md) for storage
-refusals and migration behavior. Shelf progress is approximate; source-based
-progress and time-left belong to the open Phase 3 work. The saved-book library
+refusals and migration behavior. Shelf progress started approximate; source-based
+progress and time-left landed with Phase 3. The saved-book library
 does not establish stable annotation identity for separate audio sessions.
 
 ### Phase 2 — Reading comfort: landed
@@ -68,10 +68,19 @@ remain device/browser dependent. Recorded comfort and library acceptance uses
 Chrome, including phone-width viewports; physical iOS/Safari acceptance remains
 unverified.
 
-### Phase 3 — Wayfinding
-In-book search (over `segments[].text`); bookmarks; highlights + notes (persisted via
-Phase 1's IndexedDB; a highlight is a serialized range over `segments[]`); accurate
-progress % / time-left.
+### Phase 3 — Wayfinding: landed
+
+Local in-book search over `segments[].text`, saved-book bookmarks, highlights and
+local notes (persisted in the Phase 1 IndexedDB store as serialized ranges over
+`segments[]`), and source-based reading progress with estimated time left. See the
+[search](spec-search-phase3.md), [annotations](spec-annotations-phase3.md) and
+[progress](spec-progress-phase3.md) contracts.
+[Features #57](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/57),
+[#60](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/60) and
+[#62](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/62), with their
+cross-vendor review fixes, landed through train #68. Acceptance is the `./check.sh`
+gate plus headless Chromium probes; physical phone and Safari acceptance remains
+unverified.
 
 ### Phase 4 — AI / generated voice  ⚠️ decision held open
 Listen to **any** book, including those with no audiobook, reusing the read-along UX.
@@ -95,8 +104,8 @@ opt-in upgrade), but **not locked**.
 
 ## Sequencing
 
-The original sequence was `0` → `1` → `2`/`3` → `4`. Phases 0–2 are now landed.
-Phase 3 still needs normal draft integration and qualification. Phase 4 remains
+The original sequence was `0` → `1` → `2`/`3` → `4`. Phases 0–3 are now landed;
+Phase 3 still needs device qualification. Phase 4 remains
 held at its owner decision; the earlier parallelization option is not execution authority.
 
 ## Out of scope
