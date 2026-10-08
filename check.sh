@@ -6,9 +6,8 @@
 #
 #   ./check.sh
 #
-# There is no GitHub-Actions CI (the only workflow is the comment-triggered
-# @claude request channel, which never runs on push or pull_request, and the
-# repo is deliberately dependency-free); this script IS the gate. The IP guard
+# There is no GitHub-Actions CI (the repo has no workflows and is deliberately
+# dependency-free); this script IS the gate. The IP guard
 # and the safe-pattern lint also run from the pre-commit hook (.githooks/pre-commit).
 set -e
 
@@ -52,8 +51,6 @@ echo "→ mandatory Node no-skip gate regression"
 "$PYTHON" tests/test_node_gate.py
 echo "→ draft-first merge-train policy test"
 "$PYTHON" tests/test_merge_train.py
-echo "→ @claude workflow safety-boundary test"
-"$PYTHON" tests/test_claude_workflow.py
 
 # Player behavior is a JavaScript/security boundary, so the dependency-free Node
 # runner is mandatory and no suite may silently skip.
