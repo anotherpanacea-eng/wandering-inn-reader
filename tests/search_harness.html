@@ -2,7 +2,7 @@
 <h1>Local search acceptance harness</h1>
 <p>Serve this checkout locally with Python's standard-library HTTP server, then open this page. It drives the actual player in the iframe using invented text. No data leaves this local origin. Search recording does not start audio.</p>
 <button id="seed">Load invented book</button><button id="large">Load large invented book</button><pre id="status" role="status"></pre>
-<p>Try <b>needle</b>: choose its later occurrence in scroll and paged modes. Try <b>repeat</b>: verify50 per batch, Load more and the500 cap. Check Escape returns focus, Tab stays within Search, an unfinished scan can close/reopen, and a failed import preserves results. Change font/mode before choosing a retained result.</p>
+<p>Try <b>needle</b>: choose its later occurrence in scroll and paged modes. Try <b>repeat</b>: verify50 per batch, Load more and the500 cap. Check Escape returns focus, Tab stays within Search, an unfinished scan can close/reopen, and a failed import preserves results. After closing Search, Notes, Chapters or Settings, Tab and Shift+Tab skip the closed sheet controls; reopening restores them. Change font/mode before choosing a retained result.</p>
 <iframe src="../index.html" title="Actual reader" style="width:100%;height:750px;border:1px solid"></iframe>
 <script>
 const frame=document.querySelector('iframe');
