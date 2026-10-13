@@ -35,6 +35,8 @@ echo "→ align.py data-contract test"
 "$PYTHON" tests/test_align.py
 echo "→ plan-only book manifest and no-execution boundary test"
 "$PYTHON" tests/test_book_plan.py
+echo "→ bounded book execution synthetic/helper integration test (no audio/model/network)"
+"$PYTHON" tests/test_book_execute.py
 
 echo "→ track splitter sentence/word timing contract test"
 "$PYTHON" tests/test_split_tracks.py
