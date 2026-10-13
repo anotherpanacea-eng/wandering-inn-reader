@@ -864,13 +864,12 @@
   // ANNOTATION_BACKUP_BEGIN
   const ANNOTATION_BACKUP_LIMIT=64*1048576;
   function annotationTuple(item,content=true){return JSON.stringify([item.kind,item.start.seg,item.start.offset,item.end?.seg??null,item.end?.offset??null,...(content?[item.label,item.note]:[])]);}
-  function annotationSnapshotEqual(a,b){return a.version===b.version&&a.nextId===b.nextId&&a.items.length===b.items.length&&a.items.every((x,i)=>x.id===b.items[i].id&&x.revision===b.items[i].revision&&annotationTuple(x)===annotationTuple(b.items[i]));}
   async function annotationSourceDigest(source,digest=globalThis.crypto?.subtle){
     if(!digest||typeof digest.digest!=="function")throw new Error("DIGEST");
     try{const bytes=new TextEncoder().encode(JSON.stringify(source.map(x=>x.text))),hash=new Uint8Array(await digest.digest("SHA-256",bytes));return Array.from(hash,x=>x.toString(16).padStart(2,"0")).join("");}catch(e){throw new Error("DIGEST");}
   }
   function annotationBackupData(file,identity,hash,source){
-    if(!annotationKeys(file,["format","version","bookIdentity","sourceSha256","annotations"])||file.format!=="inn-reader-annotations"||file.version!==1||typeof file.bookIdentity!=="string"||!file.bookIdentity.length||file.bookIdentity.length>1024||typeof file.sourceSha256!=="string"||!/^[0-9a-f]{64}$/.test(file.sourceSha256))throw new Error("FILE");
+    if(!annotationKeys(file,["format","version","bookIdentity","sourceSha256","annotations"])||file.format!=="inn-reader-annotations"||file.version!==1||typeof file.bookIdentity!=="string"||typeof file.sourceSha256!=="string"||!/^[0-9a-f]{64}$/.test(file.sourceSha256))throw new Error("FILE");
     if(file.bookIdentity!==identity)throw new Error("BOOK");if(file.sourceSha256!==hash)throw new Error("SOURCE");annotationData(file.annotations,source);return file;
   }
   function annotationBackupParse(bytes){
@@ -882,14 +881,14 @@
     if(bytes.byteLength>ANNOTATION_BACKUP_LIMIT)throw new Error("FILE_LIMIT");return bytes;
   }
   function annotationBackupPreview(data,incoming,source){
-    annotationData(data,source);annotationData(incoming,source);const counts=new Map(),anchors=new Map();for(const item of data.items){const key=annotationTuple(item),anchor=annotationTuple(item,false);counts.set(key,(counts.get(key)||0)+1);if(!anchors.has(anchor))anchors.set(anchor,[]);anchors.get(anchor).push({item,key});}
-    return incoming.items.map(item=>{const key=annotationTuple(item),count=counts.get(key)||0;if(count){counts.set(key,count-1);return {item,type:"duplicate",existing:[],selected:false};}
-      const existing=(anchors.get(annotationTuple(item,false))||[]).filter(x=>x.key!==key).map(x=>x.item),type=existing.length?"conflict":"new";return {item,type,existing,selected:type==="new"};});
+    annotationData(data,source);annotationData(incoming,source);const counts=new Map(),anchors=new Map();for(const item of data.items){const key=annotationTuple(item),anchor=annotationTuple(item,false);counts.set(key,(counts.get(key)||0)+1);if(!anchors.has(anchor))anchors.set(anchor,new Set());anchors.get(anchor).add(key);}
+    return incoming.items.map(item=>{const key=annotationTuple(item),count=counts.get(key)||0;if(count){counts.set(key,count-1);return {item,type:"duplicate"};}
+      return {item,type:[...(anchors.get(annotationTuple(item,false))||[])].some(k=>k!==key)?"conflict":"new"};});
   }
-  function annotationBackupMerge(data,source,expected,incoming,choices){
-    annotationData(data,source);annotationData(expected,source);if(!annotationSnapshotEqual(data,expected))throw new Error("CONFLICT");
-    const rows=annotationBackupPreview(data,incoming,source);if(!Array.isArray(choices)||choices.length!==rows.length||choices.some((x,i)=>typeof x!=="boolean"||(x&&rows[i].type==="duplicate")))throw new Error("DATA");
-    const additions=rows.filter((x,i)=>choices[i]),count=additions.length;if(data.items.length+count>1000||count>Number.MAX_SAFE_INTEGER-data.nextId)throw new Error("LIMIT");
+  // Recomputed against the latest saved annotations inside the write transaction;
+  // restore only appends, so nothing saved after the preview can be overwritten.
+  function annotationBackupMerge(data,source,incoming,addConflicts){
+    const additions=annotationBackupPreview(data,incoming,source).filter(x=>x.type==="new"||(addConflicts===true&&x.type==="conflict")),count=additions.length;if(data.items.length+count>1000||count>Number.MAX_SAFE_INTEGER-data.nextId)throw new Error("LIMIT");
     const next=JSON.parse(JSON.stringify(data));for(const row of additions){const item=JSON.parse(JSON.stringify(row.item));item.id=next.nextId++;item.revision=1;next.items.push(item);}return annotationData(next,source);
   }
   // ANNOTATION_BACKUP_END
@@ -1022,7 +1021,7 @@
           if(!ctx.current()||!r||!annotationInstanceValid(ctx.instance)||r.annotationInstance!==ctx.instance)throw new Error("STALE");
           valid(r);if(!annotationSourceEqual(r.doc.segments,ctx.source))throw new Error("SOURCE");
           const data=annotationStored(r);
-          if(op){r.annotations=op.action==="restore"?annotationBackupMerge(data,r.doc.segments,op.expected,op.incoming,op.choices):annotationChange(data,r.doc.segments,op);tx.objectStore("books").put(r);done(r.annotations);}else done(data);
+          if(op){r.annotations=op.action==="restore"?annotationBackupMerge(data,r.doc.segments,op.incoming,op.addConflicts):annotationChange(data,r.doc.segments,op);tx.objectStore("books").put(r);done(r.annotations);}else done(data);
         });
       }),
       position:(id,value,ctx=null)=>transaction("readwrite",(tx,read,done)=>{
@@ -1749,7 +1748,7 @@
       const rd=$("#reader");if(paged){setPage(info.col);goToCol(info.col,false);}else{const old=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-12;rd.style.scrollBehavior=old;setPage(pageOf(curSeg));}progressGesture=false;retainProgress(fresh.start);save(true);
     }catch(e){if(annotationCurrent(ctx))annotationStatus(e.message==="GEOMETRY"?"Unable to show this annotation.":annotationMessage(e.message));}
   }
-  function annotationBackupError(code){return ({DIGEST:"Backup and restore require browser SHA-256 support. Ordinary notes remain available.",FILE:"Invalid annotation backup file.",FILE_LIMIT:"Backup files must be at most 64 MiB.",BOOK:"This backup belongs to a different book. Import and open its original book first.",SOURCE:"This backup's source text differs. No annotations were changed.",CONFLICT:"Annotations changed after preview. Refresh preview, inspect it, then Apply again. Your choices are kept for inspection.",STALE:"This book session changed. Reopen the saved book and choose the backup again.",DATA:"Annotation data is unreadable. No annotations were changed.",LIMIT:"The selected additions exceed annotation or ID limits. Choose fewer entries.",STORAGE:"Storage did not complete. Nothing was restored; the preview is kept for retry."})[code]||"Backup or restore did not complete. No annotation changes were confirmed.";}
+  function annotationBackupError(code){return ({DIGEST:"Backup and restore require browser SHA-256 support. Ordinary notes remain available.",FILE:"Invalid annotation backup file.",FILE_LIMIT:"Backup files must be at most 64 MiB.",BOOK:"This backup belongs to a different book. Import and open its original book first.",SOURCE:"This backup's source text differs. No annotations were changed.",STALE:"This book session changed. Reopen the saved book and choose the backup again.",DATA:"Annotation data is unreadable. No annotations were changed.",LIMIT:"The additions would exceed the 1000-annotation or ID limit. Nothing was restored.",STORAGE:"Storage did not complete. Nothing was restored; the preview is kept for retry."})[code]||"Backup or restore did not complete. No annotation changes were confirmed.";}
   function annotationBackupSetBusy(value){annotationBusy=value;if(sheetKind==="annotations")renderAnnotations();}
   async function exportAnnotationBackup(){
     const ctx=annotationSession;if(annotationBusy||annotationEditor||annotationProblem||!annotationCurrent(ctx))return;
@@ -1761,48 +1760,35 @@
     }catch(e){if(annotationCurrent(ctx))annotationBackupStatus=annotationBackupError(e.message);}
     finally{if(annotationCurrent(ctx)){annotationBackupSetBusy(false);$("#annotationExport")?.focus();}}
   }
-  async function prepareAnnotationRestore(file=null){
+  async function prepareAnnotationRestore(file){
     const ctx=annotationSession;if(annotationBusy||annotationEditor||annotationProblem||!annotationCurrent(ctx))return;
-    const previous=annotationBackupState;annotationBackupStatus="Reading backup and preparing preview…";annotationBackupSetBusy(true);
-    try{let incoming;
-      if(file){if(file.size>ANNOTATION_BACKUP_LIMIT)throw new Error("FILE_LIMIT");incoming=annotationBackupParse(await file.arrayBuffer());}else{if(!previous||previous.ctx!==ctx)return;incoming=previous.file;}
+    annotationBackupStatus="Reading backup and preparing preview…";annotationBackupSetBusy(true);
+    try{if(file.size>ANNOTATION_BACKUP_LIMIT)throw new Error("FILE_LIMIT");const incoming=annotationBackupParse(await file.arrayBuffer());
       const hash=await annotationSourceDigest(ctx.source);annotationBackupData(incoming,ctx.identity,hash,ctx.source);
       const data=await library.annotations(ctx);if(!annotationCurrent(ctx))return;
-      const snapshot=JSON.parse(JSON.stringify(data)),rows=annotationBackupPreview(snapshot,incoming.annotations,ctx.source);
-      annotationBackupState={ctx,file:incoming,snapshot,rows,choices:rows.map(x=>x.selected),index:0};annotationBackupStatus="Preview only. Restore merges entries; it does not rewind edits or delete current notes.";
-    }catch(e){if(annotationCurrent(ctx)){if(file)annotationBackupState=null;annotationBackupStatus=annotationBackupError(e.message);}}
+      annotationBackupState={ctx,file:incoming,rows:annotationBackupPreview(data,incoming.annotations,ctx.source),existing:data.items.length,nextId:data.nextId,addConflicts:false};annotationBackupStatus="Preview only. Restore merges entries; it does not rewind edits or delete current notes.";
+    }catch(e){if(annotationCurrent(ctx)){annotationBackupState=null;annotationBackupStatus=annotationBackupError(e.message);}}
     finally{if(annotationCurrent(ctx)){annotationBackupSetBusy(false);$("#annotationRestoreApply,#annotationRestoreFile")?.focus();}}
   }
   async function applyAnnotationRestore(){
     const state=annotationBackupState,ctx=state?.ctx;if(annotationBusy||!state||!annotationCurrent(ctx))return;
-    if(!state.choices.some(Boolean)){annotationBackupStatus="Nothing to add.";renderAnnotations();return;}
     annotationBackupStatus="Restoring…";annotationBackupSetBusy(true);
-    try{const data=await queueLibrary(()=>library.annotations(ctx,{action:"restore",expected:state.snapshot,incoming:state.file.annotations,choices:state.choices.slice()}));if(!annotationCurrent(ctx))return;
+    try{const data=await queueLibrary(()=>library.annotations(ctx,{action:"restore",incoming:state.file.annotations,addConflicts:state.addConflicts}));if(!annotationCurrent(ctx))return;
       annotationItems=data.items;annotationProblem="";annotationBackupState=null;annotationBackupStatus="Restored on this device.";renderAnnotationMarks();
-    }catch(e){if(annotationCurrent(ctx))annotationBackupStatus=annotationBackupError(["DATA","LIMIT","CONFLICT","STALE","SOURCE"].includes(e.message)?e.message:"STORAGE");}
-    finally{if(annotationCurrent(ctx)){annotationBackupSetBusy(false);$("#annotationRestoreRefresh,#annotationExport")?.focus();}}
+    }catch(e){if(annotationCurrent(ctx))annotationBackupStatus=annotationBackupError(["DATA","LIMIT","STALE","SOURCE"].includes(e.message)?e.message:"STORAGE");}
+    finally{if(annotationCurrent(ctx)){annotationBackupSetBusy(false);$("#annotationRestoreApply,#annotationExport")?.focus();}}
   }
   function renderAnnotationRestore(sheet){
     const state=annotationBackupState,counts={new:0,duplicate:0,conflict:0};for(const row of state.rows)counts[row.type]++;
-    const selected=state.choices.filter(Boolean).length,total=state.snapshot.items.length+selected,limit=total>1000||selected>Number.MAX_SAFE_INTEGER-state.snapshot.nextId;
+    const adding=counts.new+(state.addConflicts?counts.conflict:0),total=state.existing+adding,limit=total>1000||adding>Number.MAX_SAFE_INTEGER-state.nextId;
     sheet.appendChild(el("h3",{text:"Restore preview"}));sheet.appendChild(el("p",{text:doc.title+" · "+state.ctx.identity}));
-    sheet.appendChild(el("p",{id:"annotationRestoreCounts",role:"status",text:state.rows.length+" incoming · "+counts.new+" new · "+counts.duplicate+" exact duplicates · "+counts.conflict+" conflicts · "+selected+" selected additions · "+total+" resulting total"}));
+    sheet.appendChild(el("p",{id:"annotationRestoreCounts",role:"status",text:state.rows.length+" incoming · "+counts.new+" new · "+counts.duplicate+" exact duplicates (skipped) · "+counts.conflict+" conflicts · "+total+" resulting total"}));
     if(!sourceIdentityStable||!state.ctx.identity.startsWith("generic-v1:"))sheet.appendChild(el("p",{text:"This identity restores only where that exact saved identity already exists; a fresh fallback import is a different book."}));
-    if(state.rows.length){
-      sheet.appendChild(el("p",{text:"Inspect incoming entry "+(state.index+1)+" of "+state.rows.length+". New entries are selected by default; conflicts are kept unless you choose a separate copy."}));
-      for(const [label,step,id] of [["Previous entry",-1,"annotationRestorePrevious"],["Next entry",1,"annotationRestoreNext"]]){const button=el("button",{type:"button",id,text:label,onclick:()=>{if(annotationBusy)return;state.index+=step;renderAnnotations();$(step>0?"#annotationRestorePrevious":"#annotationRestoreNext")?.focus();}});button.disabled=annotationBusy||state.index+step<0||state.index+step>=state.rows.length;sheet.appendChild(button);}
-    }
-    state.rows.slice(state.index,state.index+1).forEach((row,j)=>{const i=state.index+j;
-      const item=row.item,location="Segment "+(item.start.seg+1)+", offset "+item.start.offset+(item.end?" through segment "+(item.end.seg+1)+", offset "+item.end.offset:""),article=el("article",{data:{restoreRow:String(i)}},[el("h4",{text:(i+1)+". "+row.type+" · "+item.kind}),el("p",{text:location}),el("p",{text:"Incoming label: "+item.label}),el("pre",{text:item.note})]);
-      for(const existing of row.existing)article.appendChild(el("div",{},[el("p",{text:"Saved item #"+existing.id+" label: "+existing.label}),el("pre",{text:existing.note})]));
-      if(row.type==="duplicate")article.appendChild(el("p",{text:"Exact duplicate: skipped."}));else{
-        const input=el("input",{id:"annotationRestoreChoice"+i,type:"checkbox","aria-label":(row.type==="conflict"?"Add a separate copy":"Add incoming entry")+" "+(i+1)});input.checked=state.choices[i];input.disabled=annotationBusy;
-        input.onchange=()=>{state.choices[i]=input.checked;renderAnnotations();$("#annotationRestoreChoice"+i)?.focus();};article.appendChild(el("label",{for:input.id},[input,row.type==="conflict"?" Add a separate copy (unchecked: keep existing)":" Add entry (unchecked: skip)"]));
-      }sheet.appendChild(article);
-    });
+    if(counts.conflict){const input=el("input",{id:"annotationRestoreConflicts",type:"checkbox"});input.checked=state.addConflicts;
+      input.onchange=()=>{state.addConflicts=input.checked;renderAnnotations();$("#annotationRestoreConflicts")?.focus();};
+      sheet.appendChild(el("label",{for:input.id},[input," Also add "+counts.conflict+(counts.conflict===1?" entry that differs":" entries that differ")+" at already-annotated spots"]));}
     if(limit)sheet.appendChild(el("p",{text:annotationBackupError("LIMIT")}));
-    const apply=el("button",{type:"button",id:"annotationRestoreApply",text:selected?"Apply restore":"Nothing to add",onclick:applyAnnotationRestore});apply.disabled=annotationBusy||limit||!selected;sheet.appendChild(apply);
-    sheet.appendChild(el("button",{type:"button",id:"annotationRestoreRefresh",text:"Refresh preview",onclick:()=>prepareAnnotationRestore()}));
+    const apply=el("button",{type:"button",id:"annotationRestoreApply",text:adding?"Apply restore":"Nothing to add",onclick:applyAnnotationRestore});apply.disabled=annotationBusy||limit||!adding;sheet.appendChild(apply);
     sheet.appendChild(el("button",{type:"button",id:"annotationRestoreCancel",text:"Cancel restore",onclick:()=>{annotationBackupState=null;annotationBackupStatus="Restore canceled. No annotations were changed.";renderAnnotations();$("#annotationRestoreFile")?.focus();}}));
   }
   function renderAnnotations(){
@@ -1832,7 +1818,7 @@
     sheet.appendChild(el("button",{type:"button",id:"annotationReload",text:"Reload annotations",onclick:()=>refreshAnnotations()}));
     sheet.appendChild(el("button",{type:"button",id:"annotationClose",text:editor?"Cancel and close":"Close",onclick:()=>{if(!annotationBusy)closeSheet();}}));
     if(annotationBusy)for(const control of sheet.querySelectorAll("input,textarea,button"))control.disabled=true;
-    else if(annotationProblem)for(const control of sheet.querySelectorAll("#annotationExport,#annotationRestoreFile,#annotationRestoreApply,#annotationRestoreRefresh"))control.disabled=true;
+    else if(annotationProblem)for(const control of sheet.querySelectorAll("#annotationExport,#annotationRestoreFile,#annotationRestoreApply"))control.disabled=true;
   }
   function annotationSheetKey(e){
     if(sheetKind!=="annotations")return false;
