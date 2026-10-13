@@ -108,8 +108,10 @@ content tuple has at least its incoming multiplicity locally. A partial selectio
 does not meet that guarantee: with two identical incoming entries, skipping one
 and adding one leaves one duplicate and one excess new entry on the next preview.
 That excess entry is selected by default again and still requires explicit Apply;
-the preview exposes it rather than remembering earlier skip choices. Incoming file
-order decides matching and allocation;
+the preview exposes it rather than remembering earlier skip choices. Every skipped
+entry remains eligible on a later preview, including a distinct entry B when a
+file contains A and B and only A was selected. Incoming file order decides matching
+and allocation;
 no sorting or normalization changes strings or anchors.
 
 An unmatched incoming entry with no local item at the same kind/start/end is new
@@ -175,7 +177,9 @@ or permanent verification machinery. Prove these behaviors with invented text:
    once all incoming multiplicities are present. With two identical incoming
    entries, skip one/add one, reopen preview and verify one duplicate plus one
    excess new entry selected by default; Cancel leaves the first restore unchanged,
-   and a second explicit Apply adds the remaining occurrence.
+   and a second explicit Apply adds the remaining occurrence. Also restore only A
+   from a file containing distinct A and B: the next preview skips duplicate A
+   and offers previously skipped B as a new default-selected entry.
 2. Wrong book with same title, changed projection of identical source bytes,
    reordered segments, different fallback identity, malformed/unknown/oversize
    file, invalid ranges/surrogates, excessive values and malformed local data
