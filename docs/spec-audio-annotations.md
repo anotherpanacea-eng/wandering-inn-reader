@@ -72,12 +72,17 @@ Read/validate every selected alignment doc once for admission. Require validateD
 success and nondecreasing segment start times (equal starts are allowed). Preserve
 track order, segment order and every exact text string, including empty text. Use
 known schema fields only in the saved documents; do not retain arbitrary imported
-properties. Proposed resource limits for this increment: 1000 tracks; 100 MiB per
-sync file and 256 MiB total selected sync bytes; 250000 total segments, 100000 UTF16
+properties. Proposed resource limits for this increment: 1000 tracks; 1 MiB for
+manifest.json, 100 MiB per sync file and 256 MiB total selected JSON bytes (manifest
+plus selected sync files; without a manifest, count sync files only); 250000 total segments, 100000 UTF16
 units per segment, 16000000 total text units and 25000 total chapters. Refuse before
-oversized reads, and before mutation for structural/text bounds; never shorten the
-book. These reuse generic-ingest scales, rather than introducing an unbounded whole-
-book parse. Audio bytes are not read for identity or stored by this increment.
+reading/parsing any file exceeding its byte cap, and before further selected JSON
+reads/parses if their known File.size sum would exceed the total. Exact byte-cap
+boundaries are allowed; one byte over refuses before read/parse or admission mutation.
+Structural/text bounds refuse before mutation; never shorten the book. The manifest
+cap is a deliberate proposed product limit; the other bounds reuse generic-ingest
+scales rather than introducing an unbounded whole-book parse. Audio bytes are not
+read for identity or stored by this increment.
 
 Identity is `audio-text-v1:` plus lowercase SHA256 hex of UTF8 encoding of
 `JSON.stringify(tracks.map(d => d.segments.map(s => s.text)))`. Compute outside an
@@ -221,7 +226,7 @@ for these browser behaviors; a new headless harness is not admitted. Minimum mat
 | --- | --- |
 | One local single-track book and a two-track manifest book | Explicit save enables notes; shelf/reload reopen preserves them and requires local audio reselection. Unsaved/demo/remote/legacy audio explains unavailability. |
 | Stable identity | Renames/retiming keep notes; same title different text, reordered/repartitioned tracks and text-book identity remain separate. Same transcript renditions intentionally share notes. Digest/random support failure leaves ordinary playback intact. |
-| Complete admission | Missing/duplicate/ambiguous pairs, malformed manifest or later-track JSON, unsorted segment starts and each resource-bound edge refuse without partial saved book or selector mutation. |
+| Complete admission | Missing/duplicate/ambiguous pairs, malformed manifest or later-track JSON, unsorted segment starts and each resource-bound edge refuse without partial saved book or selector mutation. Exercise manifest exactly 1 MiB and one byte over, and combined manifest + sync JSON exactly 256 MiB and one byte over; oversize refuses before read/parse or admission mutation. Without a manifest, only selected sync bytes count toward the total. |
 | Source anchors | Forward/backward multisegment selection, empty segments and emoji boundaries round-trip. Mixed heading/control and altered timed-token DOM refuse without shortened selection. Bookmark targets proved-visible source text in pages/scroll. |
 | Playback and marks | Open Notes while playing, pause/edit/save/cancel/close, then explicit Play. No auto-next/headset play/follow displaces the editor; exact text and overlapping marks survive sentence/word glow, search and relayout. Token mismatch uses sentence glow. |
 | Whole-book navigation | List notes from both tracks; navigate to exact source offset paused with/without audio, with approximate segment-start seek. Rapid competing track/book/navigation loads cannot publish stale view or bind wrong notes. |
