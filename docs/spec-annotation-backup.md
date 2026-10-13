@@ -71,9 +71,9 @@ fresh fallback reimport is a different book. Import never creates a book.
 
 Reject files over64 MiB before reading/parsing; reject UTF8 decoding errors,
 invalid JSON, array/null envelopes, unknown format/version/fields, malformed
-identity/digest and invalid annotation data. bookIdentity is a nonempty string
-of at most1024 UTF16 units; sourceSha256 is exactly64 lowercase hex characters.
-Export applies the same bounds and reports a refusal without claiming success.
+identity/digest and invalid annotation data. bookIdentity is a string that must
+equal the open book's identity; sourceSha256 is exactly64 lowercase hex characters.
+Export applies the same checks and reports a refusal without claiming success.
 The64 MiB cap accommodates the shipped1000-item limit even with maximal escaped
 notes; this is a proposed resource bound for the reviewer, not a prior owner ruling.
 No zip/import archive support. A parse/validation failure cannot mutate storage.
@@ -92,76 +92,53 @@ URLs after use. Storage/read/download failure reports failure without changing
 annotations. No unsaved editor text enters the backup.
 
 A chosen valid file produces a transient preview with book title/identity, incoming
-count and counts of new entries, exact duplicates and conflicts; show the selected
-add count and resulting total. No import-time mutation, including lifetime
-initialization, is allowed. The book must already have a valid bound lifetime.
-Opening/canceling a preview or choosing another file commits nothing. File and
-preview live in memory only; errors/logs/URLs/localStorage/network never contain
-notes, excerpts or imported JSON. Render everything through inert DOM helpers.
+count, counts of new entries, exact duplicates and conflicts, and the resulting
+total. No import-time mutation, including lifetime initialization, is allowed. The
+book must already have a valid bound lifetime. Opening/canceling a preview or
+choosing another file commits nothing. File and preview live in memory only.
+Render everything through inert DOM helpers.
 
 Matching ignores incoming IDs/revisions and compares exact kind, start/end,
 label and note. For each content tuple, match incoming occurrences one-to-one
 against existing identical occurrences first. These are exact duplicates and are
 skipped; excess incoming copies are considered separately, preserving intentional
-duplicate multiplicity. Restoring the same file adds nothing once every incoming
-content tuple has at least its incoming multiplicity locally. A partial selection
-does not meet that guarantee: with two identical incoming entries, skipping one
-and adding one leaves one duplicate and one excess new entry on the next preview.
-That excess entry is selected by default again and still requires explicit Apply;
-the preview exposes it rather than remembering earlier skip choices. Every skipped
-entry remains eligible on a later preview, including a distinct entry B when a
-file contains A and B and only A was selected. Incoming file order decides matching
-and allocation;
-no sorting or normalization changes strings or anchors.
+duplicate multiplicity, so restoring the same file again adds nothing. Incoming
+file order decides matching and allocation; no sorting or normalization changes
+strings or anchors.
 
-An unmatched incoming entry with no local item at the same kind/start/end is new
-and selected to add by default. If any local item has that same kind/start/end but
-different label/note, it is a conflict: display both values and local item ID(s),
-with Keep existing (default, skip incoming) or Add a separate copy. If there are
-multiple local entries there, display all relevant entries so the choice is
-unambiguous. The excess occurrence of an otherwise identical tuple is new unless
-another differing local tuple at the anchor makes it a conflict. A new entry may
-also be explicitly skipped. No existing item is edited/deleted; incoming absence
-is not a deletion. Explain that restore merges entries rather than rewinding edits.
+An unmatched incoming entry is a conflict when a local item has the same
+kind/start/end but a different label/note; otherwise it is new. New entries are
+always added. Conflicts are skipped unless the reader ticks one checkbox, "Also add
+N entries that differ at already-annotated spots", which adds every conflict as a
+separate entry. No existing item is edited/deleted; incoming absence is not a
+deletion. Explain that restore merges entries rather than rewinding edits. Apply
+restore is disabled if the additions exceed the per-book bound or local nextId has
+insufficient safe-integer space. Never silently import a partial subset on limit
+failure. A zero-addition preview reports Nothing to add and needs no write.
 
-Preview exposes all conflicts and selected entries for inspection, with accessible
-labels, status announcements, Escape/Tab containment and focus return through the
-existing sheet behavior. Full notes are available as inert plain text. Apply
-restore is disabled if the selected additions exceed the per-book bound or local
-nextId has insufficient safe-integer space. Never silently import a partial subset
-on limit failure. A zero-addition preview reports Nothing to add and needs no write.
+## Commit
 
-## Commit and races
-
-Capture the current session/generation, persisted annotationInstance, ordered source
-and a cloned valid annotations envelope at preview. On Apply, queue one ordinary
-readwrite transaction through the existing library queue. Reread the current book
-inside it and check the session is still current, book still exists, bound lifetime
-is unchanged, ordered source matches and the entire annotation envelope is still
-semantically equal to the preview snapshot (including nextId, IDs, revisions and
-item order). Treat an absent field as the empty envelope. Compare fields/strings;
-JSON property ordering is not a semantic change. A normal position/metadata write
-alone does not invalidate preview.
-
-Any changed annotation, deleted/reimported book, changed source or replaced open
-session refuses the whole restore with no write. Retain chosen input/choices for
-inspection, offer Refresh preview, and require a fresh preview plus Apply after
-refresh; never silently rebase and apply old choices. Switching books invalidates
-preview and cannot apply the old file to the new book. Do not adopt a different
-lifetime through a list read. Validate the candidate and bounds again within the
-transaction. Add selected entries in file order with fresh local IDs from latest
-nextId and revision1; nextId remains monotonic, existing IDs/revisions are untouched.
-Never copy portable annotationInstance or call library.admit for restore.
+On Apply, queue one ordinary readwrite transaction through the existing library
+queue. Inside it, reread the book and run the existing annotation checks (session
+still current, book still exists, bound lifetime unchanged, ordered source
+matches), then recompute duplicates, new entries and conflicts against the latest
+saved annotations and add the new entries (plus conflicts when the checkbox is
+ticked). Restore only appends, so an edit made elsewhere between preview and Apply
+cannot be overwritten; at worst it shows as an extra entry the reader can delete.
+Switching books invalidates preview and cannot apply the old file to the new book.
+Add entries in file order with fresh local IDs from latest nextId and revision1;
+nextId remains monotonic, existing IDs/revisions are untouched. Never copy portable
+annotationInstance or call library.admit for restore.
 
 Update only annotations on the reread record, preserving its position, cover,
-metadata and other fields. One successful transaction adds all selected entries;
+metadata and other fields. One successful transaction adds all entries;
 abort/quota/error adds none, preserves previous committed marks and retains the
 preview for retry. Repeat Apply is disabled while pending. Report Restored only
 on transaction completion. A commit for the original book may complete after UI
-replacement; never apply its marks/status to another book or promise rollback of
-an already committed operation. Refresh normal committed list/marks after success.
-Malformed local data refuses export/preview/apply and remains unchanged; base-book
-reading and position writes continue under the shipped behavior.
+replacement; never apply its marks/status to another book. Refresh normal
+committed list/marks after success. Malformed local data refuses
+export/preview/apply and remains unchanged; base-book reading and position writes
+continue under the shipped behavior.
 
 ## Build acceptance
 
@@ -173,36 +150,17 @@ or permanent verification machinery. Prove these behaviors with invented text:
 1. A download preserves bookmark/highlight/note values including Unicode, empty
    text, cross-segment canonical ranges and intentional duplicate multiplicity.
    A second device with the same stable book/source restores them with fresh
-   local IDs; exporting empty annotations works. Repeated full restore is a no-op
-   once all incoming multiplicities are present. With two identical incoming
-   entries, skip one/add one, reopen preview and verify one duplicate plus one
-   excess new entry selected by default; Cancel leaves the first restore unchanged,
-   and a second explicit Apply adds the remaining occurrence. Also restore only A
-   from a file containing distinct A and B: the next preview skips duplicate A
-   and offers previously skipped B as a new default-selected entry.
+   local IDs; exporting empty annotations works. Repeated full restore is a no-op.
 2. Wrong book with same title, changed projection of identical source bytes,
    reordered segments, different fallback identity, malformed/unknown/oversize
    file, invalid ranges/surrogates, excessive values and malformed local data
    refuse without writes. Same exact fallback identity can restore locally;
    missing digest capability leaves reading/ordinary annotation CRUD functional.
 3. Preview/cancel/file replacement write nothing. Exact duplicates, excess copies,
-   new entries, same-anchor conflicts with multiple local candidates and selected
-   skips obey the count/choice rules. Keep existing and Add a separate copy retain
-   current entries and never overwrite/delete. Capacity and ID exhaustion refuse
-   the complete selected batch with no truncation.
-4. A two-tab edit/create/delete between preview and Apply, delete/reimport with
-   reused IDs, queued book replacement and source change all refuse stale Apply.
-   A position-only change remains valid. Refresh requires another explicit Apply.
-   Concurrent successful creations survive; restore cannot resurrect a deleted book.
-5. Actual browser IndexedDB completion/abort and a forced storage failure prove
-   all-or-none writes, metadata preservation, retained preview and honest status;
-   helper mocks alone are insufficient. Reload proves persistence and marks, and
-   stale-session completion cannot affect another book's UI.
-6. Real browser download/file input, inert hostile note/label strings, keyboard
-   navigation/focus, scroll/paged marks and the absence of note/JSON leakage into
-   network, position-sync payloads, logs, URLs and other persistent stores are
-   exercised. Record browser/platform and device limits honestly. No audio/corpus
-   fixture or physical iOS qualification is implied.
+   new entries and same-anchor conflicts obey the count rules; the checkbox adds
+   conflicts as separate entries and never overwrites/deletes. An entry saved
+   between preview and Apply is skipped as a duplicate at Apply. Capacity and ID
+   exhaustion refuse the whole batch with no truncation.
 
 Run the existing canonical local gate with mandatory no-skip new behavioral cases,
 IP/safe-pattern checks, and independent exact-head implementation review. The
