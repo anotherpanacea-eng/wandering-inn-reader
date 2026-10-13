@@ -82,6 +82,10 @@ cross-vendor review fixes, landed through train #68. Acceptance is the `./check.
 gate plus headless Chromium probes; physical phone and Safari acceptance remains
 unverified.
 
+Proposed follow-up: a notes backup file and merge-only restore, so annotations
+survive cleared storage, a new device or delete-and-reimport. See the
+[backup spec](spec-annotation-backup.md).
+
 ### Phase 4 — AI / generated voice  ⚠️ decision held open
 Listen to **any** book, including those with no audiobook, reusing the read-along UX.
 **Synergy:** TTS emits word-boundary events as it speaks → word-level alignment *for free*,
