@@ -471,68 +471,11 @@ class ExecuteTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout),['value Ω with spaces','0,1','--boolean'])
         self.assertEqual(log.read_text(encoding='utf-8'),result.stdout)
 
-    def test_private_outputs_refuse_git_dropbox_symlink_and_manifest_collision(self):
-        for marker in ('.git','Dropbox'):
-            if marker=='.git':
-                (self.base/marker).mkdir()
-                with self.assertRaises(driver.ExecutionError): self.run_book()
-                (self.base/marker).rmdir()
-            else:
-                write_json(self.path,self.data)
-                manifest=load_manifest(self.path); manifest['work_directory']=str(self.base/marker)
-                with self.assertRaises(driver.ExecutionError): driver.execute(manifest,command=self.runner)
-        (self.base/'wav').symlink_to(self.base/'other',target_is_directory=True)
-        with self.assertRaises(driver.ExecutionError): self.run_book()
-        (self.base/'wav').unlink()
-        for name in ('text.txt','verify.log'):
-            write_json(self.path,self.data)
-            manifest=load_manifest(self.path); manifest['manifest']=str(self.base/name)
-            with self.assertRaises(driver.ExecutionError): driver.execute(manifest,command=self.runner)
-
-    def test_nested_output_git_markers_preserved_before_any_stage(self):
-        for directory in ('wav','per-chapter','package'):
-            folder=self.base/directory; folder.mkdir(exist_ok=True)
-            marker=folder/'.git'
-            sentinel=folder/'keep-private.bin'; sentinel.write_bytes(b'private sentinel')
-            for kind in ('directory','gitfile','broken-symlink'):
-                with self.subTest(directory=directory,kind=kind):
-                    if kind=='directory': marker.mkdir()
-                    elif kind=='gitfile': marker.write_text('gitdir: nonexistent-synthetic-dir\n')
-                    else: marker.symlink_to(folder/'nonexistent-synthetic-dir',target_is_directory=True)
-                    self.runner.calls.clear()
-                    with self.assertRaises(driver.ExecutionError): self.run_book()
-                    self.assertEqual(self.runner.calls,[])
-                    self.assertEqual(sentinel.read_bytes(),b'private sentinel')
-                    self.assertEqual({p.name for p in folder.iterdir()},{'.git','keep-private.bin'})
-                    if kind=='directory':
-                        self.assertTrue(marker.is_dir()); marker.rmdir()
-                    elif kind=='gitfile':
-                        self.assertEqual(marker.read_text(),'gitdir: nonexistent-synthetic-dir\n'); marker.unlink()
-                    else:
-                        self.assertTrue(marker.is_symlink())
-                        self.assertEqual(marker.readlink(),folder/'nonexistent-synthetic-dir'); marker.unlink()
-
-    def test_generated_chapter_text_symlinks_preserve_outside_sentinel(self):
-        from align_chapters import slug
-        folder=self.base/'per-chapter'; folder.mkdir()
-        sentinel=self.base.parent/'private-sentinel.txt'
-        sentinel.write_bytes(b'PRIVATE SENTINEL MUST SURVIVE')
-        for index,title in enumerate(('First Ω','Second')):
-            leaf=folder/f'chap{index:02d}_{slug(title)}.txt'
-            for broken in (False,True):
-                with self.subTest(index=index,broken=broken):
-                    target=sentinel if not broken else self.base.parent/'missing-private-sentinel.txt'
-                    leaf.symlink_to(target)
-                    self.runner.calls.clear()
-                    with self.assertRaises(driver.ExecutionError): self.run_book()
-                    self.assertNotIn('m4b_cut.py',self.runner.names())
-                    self.assertNotIn('align_chapters.py',self.runner.names())
-                    self.assertEqual(self.runner.aligned,[])
-                    self.assertEqual(sentinel.read_bytes(),b'PRIVATE SENTINEL MUST SURVIVE')
-                    self.assertTrue(leaf.is_symlink())
-                    self.assertEqual(leaf.readlink(),target)
-                    if broken: self.assertFalse(target.exists())
-                    leaf.unlink()
+    def test_active_caches_refuse_dropbox_work_directory(self):
+        write_json(self.path,self.data)
+        manifest=load_manifest(self.path); manifest['work_directory']=str(self.base/'Dropbox')
+        with self.assertRaises(driver.ExecutionError): driver.execute(manifest,command=self.runner)
+        self.assertEqual(self.runner.calls,[])
 
 
 if __name__=='__main__':

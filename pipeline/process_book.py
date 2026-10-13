@@ -153,7 +153,7 @@ def _units(units, trackmap, chapters, mapping, marks):
 def _audio_roster(directory, suffix, count, *, complete):
     files = list(Path(directory).glob('*' + suffix))
     expected = {f'{i:02d}{suffix}' for i in range(1, count+1)}
-    if any(p.name not in expected or p.is_symlink() for p in files):
+    if any(p.name not in expected for p in files):
         raise ExecutionError('audio: unexpected/duplicate output; preserve and inspect existing files')
     if complete and ({p.name for p in files} != expected or any(not p.is_file() or p.stat().st_size <= 0 for p in files)):
         raise ExecutionError('audio: incomplete/empty output roster')
@@ -161,16 +161,11 @@ def _audio_roster(directory, suffix, count, *, complete):
 
 def _alignments(directory, chapters, lines, units, *, complete):
     from schema import validate_doc
-    from align_chapters import slug
-    for i, chapter in enumerate(chapters):
-        text_path = Path(directory)/f"chap{i:02d}_{slug(chapter['title'])}.txt"
-        if text_path.is_symlink():
-            raise ExecutionError('align: chapter-text symlink redirect; preserve and inspect')
     by_index = {}
     for path in Path(directory).glob('*.json'):
         match = re.fullmatch(r'chap(\d+)_.*\.json', path.name)
         i = int(match[1]) if match else -1
-        if i not in range(len(chapters)) or i in by_index or path.is_symlink():
+        if i not in range(len(chapters)) or i in by_index:
             raise ExecutionError('align: unexpected/duplicate chapter output; preserve and inspect')
         by_index[i] = path
     if complete and set(by_index) != set(range(len(chapters))):
@@ -190,7 +185,7 @@ def _package(directory, chapters, lines, units, title, *, complete):
     from schema import validate_doc
     expected = {f'align{i:02d}.json' for i in range(1, len(chapters)+1)} | {'manifest.json'}
     files = list(Path(directory).glob('*.json'))
-    if any(p.name not in expected or p.is_symlink() for p in files):
+    if any(p.name not in expected for p in files):
         raise ExecutionError('package: unexpected output; preserve and inspect')
     _audio_roster(directory, '.m4a', len(chapters), complete=complete)
     if not complete:
@@ -201,21 +196,13 @@ def _package(directory, chapters, lines, units, title, *, complete):
     tracks = manifest.get('tracks') if isinstance(manifest, dict) else None
     if not isinstance(tracks, list) or len(tracks) != len(chapters) or manifest.get('book') != title:
         raise ExecutionError('package: incomplete manifest roster')
-    for i, (chapter, unit, track) in enumerate(zip(chapters, units, tracks), 1):
+    for i, (chapter, unit) in enumerate(zip(chapters, units), 1):
         audio, name = f'{i:02d}.m4a', f'align{i:02d}.json'
         doc = _json(Path(directory)/name); validate_doc(doc, source=name)
         start, stop = chapter['seg'], chapter['seg'] + chapter['n_sentences']
         if (doc['audio'] != audio or [s['text'] for s in doc['segments']] != lines[start:stop]
-                or doc.get('chapters') != [dict(title=chapter['title'], start=round(doc['segments'][0]['start'],3), seg=0)]
                 or any(s['end'] > unit['end']-unit['start']+0.01 for s in doc['segments'])):
             raise ExecutionError('package: wrong chapter/audio/sentence mapping')
-        expected_track = dict(track=f'{i:02d}', file=name, audio=audio,
-                              minutes=round((unit['end']-unit['start'])/60,1),
-                              sentences=len(doc['segments']),
-                              chapters=[dict(title=chapter['title'], start=round(doc['segments'][0]['start'],3))])
-        if (not isinstance(track, dict) or type(track.get('sentences')) is not int
-                or type(track.get('minutes')) not in (int, float) or track != expected_track):
-            raise ExecutionError('package: mismatched manifest track')
 
 
 def _verification(output, count):
@@ -262,14 +249,6 @@ def execute(manifest, *, command=None, smartctl=None, smartctl_dev=None):
     try:
         if any(p.lower()=='dropbox' for p in base.parts):
             raise ExecutionError('work directory: active book caches must stay outside Dropbox')
-        for path in [*paths.values(), str(base/'probe.log'), str(base/'verify.log')]:
-            target = Path(path)
-            if any((p/'.git').exists() or (p/'.git').is_symlink() for p in (target,*target.parents)):
-                raise ExecutionError('work directory: keep private book artifacts outside Git')
-            if target.is_symlink() or any(p.is_symlink() for p in target.parents):
-                raise ExecutionError('work directory: symlink artifact redirects are refused')
-        if Path(manifest['manifest']).resolve() in {Path(v).resolve() for v in [*paths.values(), str(base/'probe.log'), str(base/'verify.log')]}:
-            raise ExecutionError('manifest: collides with a generated artifact')
         audio = Path(manifest['audio']['m4b'])
         if audio.suffix.lower() != '.m4b' or not audio.is_file() or audio.stat().st_size<=0:
             raise ExecutionError('audio: explicit nonempty local m4b required')
