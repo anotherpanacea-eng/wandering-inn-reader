@@ -10,6 +10,10 @@
 <li>Open the reader in another tab. Edit the same note in both tabs: the older edit must be refused and its unsaved text retained. Reload annotations must not silently refresh that editor's revision.</li>
 <li>Delete and reimport the book in the other tab. An old session must require reopening before saving.</li>
 <li>Check Tab stays in Notes, Escape closes it and returns focus, and background reader shortcuts do not run while editing.</li>
+<li>Export annotations and inspect the downloaded JSON: notes are included, book text/audio/position are absent. In a new browser profile import this same invented book and restore the file. Preview/cancel must not write; Apply persists after reload.</li>
+<li>Restore the same backup again: exact duplicates skip. Change one existing note, restore the older backup and inspect conflicts: Keep existing saves nothing; Add a separate copy keeps both.</li>
+<li>Keep a restore preview open while another tab adds/edits/deletes an annotation. Apply must refuse the stale snapshot; Refresh preview and a new Apply are required. Position-only changes must not cause a conflict.</li>
+<li>Try malformed JSON, wrong-book/source, and a failed IndexedDB transaction. No partial writes or success message; a failed restore retains the preview. Check Tab/Escape/focus with restore controls and HTML-like labels/notes.</li>
 </ol>
 <iframe src="../index.html" title="Actual reader" style="width:100%;height:750px;border:1px solid"></iframe>
 <script>
