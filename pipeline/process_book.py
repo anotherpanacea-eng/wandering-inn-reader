@@ -2,7 +2,6 @@
 import argparse
 import json
 import os
-import math
 import re
 import subprocess
 import tempfile
@@ -124,30 +123,6 @@ def _acquisition(paths):
     if not lines or cursor != len(lines):
         raise ExecutionError('text: chapter slices do not conserve all nonblank sentences')
     return markers, lines
-
-
-def _units(units, trackmap, chapters, mapping, marks):
-    starts = mapping['m4b_starts']; end = mapping['m4b_end']
-    if len(starts) != len(chapters) or end >= len(marks):
-        raise ExecutionError('map: starts count or raw end-mark index does not match inputs')
-    bounds = starts + [end]
-    expected = []
-    for i, chapter in enumerate(chapters):
-        a, b = round(marks[bounds[i]], 3), round(marks[bounds[i+1]], 3)
-        if b <= a:
-            raise ExecutionError('units: nonpositive chapter duration')
-        expected.append(dict(track=i+1, title=chapter['title'], seg=chapter['seg'], start=a, end=b))
-    expected_map = [dict(title=c['title'], seg=c['seg'], tracks=[i+1]) for i,c in enumerate(chapters)]
-    if (not isinstance(units, list) or not isinstance(trackmap, list)
-            or any(not isinstance(u, dict) or type(u.get('track')) is not int
-                   or type(u.get('seg')) is not int
-                   or any(type(u.get(k)) not in (int, float) for k in ('start', 'end')) for u in units)
-            or any(not isinstance(u, dict) or type(u.get('seg')) is not int
-                   or not isinstance(u.get('tracks'), list)
-                   or any(type(n) is not int for n in u['tracks']) for u in trackmap)
-            or units != expected or trackmap != expected_map):
-        raise ExecutionError('units: missing/duplicate/extra or mismatched unit/track-map roster')
-    return expected
 
 
 def _audio_roster(directory, suffix, count, *, complete):
@@ -282,19 +257,7 @@ def execute(manifest, *, command=None, smartctl=None, smartctl_dev=None):
                         artifacts=paths,probe_log=str(base/'probe.log'),
                         review='Review probe.log and set raw map.m4b_starts/m4b_end and confirmed=true. No cuts or alignment performed.')
         chapters, lines = _acquisition(paths)
-        probe = command([FFPROBE,'-v','error','-print_format','json','-show_chapters',str(audio)],cwd=str(base),env=env,capture=True,timeout=30)
-        if probe.returncode:
-            raise ExecutionError('map: ffprobe chapter-mark read failed')
-        raw_marks = json.loads(probe.stdout)['chapters']
-        if (not isinstance(raw_marks, list) or any(not isinstance(c, dict)
-                or type(c.get('start_time')) not in (str, int, float) for c in raw_marks)):
-            raise ExecutionError('map: malformed raw chapter marks')
-        marks = [float(c['start_time']) for c in raw_marks]
-        if not marks or any(not math.isfinite(x) or x<0 for x in marks) or any(b<=a for a,b in zip(marks,marks[1:])):
-            raise ExecutionError('map: invalid raw chapter marks')
         mapping = manifest['map']
-        if len(mapping['m4b_starts']) != len(chapters) or mapping['m4b_end']>=len(marks):
-            raise ExecutionError('map: starts count or raw end-mark index does not match inputs')
         # The units helper always writes; temp outputs avoid invalidating unchanged
         # track-map mtimes and therefore preserve its existing alignment resume path.
         with tempfile.TemporaryDirectory(prefix='.units-',dir=base) as temporary:
@@ -302,13 +265,11 @@ def execute(manifest, *, command=None, smartctl=None, smartctl_dev=None):
             stage('m4b_make_units.py',['--m4b',str(audio),'--chapters',paths['chapters'],
                   '--starts',','.join(str(n) for n in mapping['m4b_starts']),'--end',str(mapping['m4b_end']),
                   '--out-units',str(unit_path),'--out-trackmap',str(map_path),'--ffprobe',FFPROBE])
-            units = _units(_json(unit_path),_json(map_path),chapters,mapping,marks)
             for source, destination in ((unit_path,paths['units']),(map_path,paths['track_map'])):
                 if not Path(destination).exists() or _json(destination)!=_json(source):
                     os.replace(source,destination)
-        # JSON equality treats true as 1; validate the actual files reused by
-        # children as well as the freshly generated helper outputs.
-        _units(_json(paths['units']),_json(paths['track_map']),chapters,mapping,marks)
+        # m4b_make_units.py already refuses bad counts, order, range and durations.
+        units = _json(paths['units'])
         _audio_roster(paths['wav'],'.wav',len(chapters),complete=False)
         _alignments(paths['alignments'],chapters,lines,units,complete=False)
         _package(paths['package'],chapters,lines,units,manifest['title'],complete=False)

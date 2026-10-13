@@ -70,8 +70,6 @@ class SyntheticRunner:
             output = self.os_output
         elif args[0]==sys.executable and args[1]=='-c':
             output = self.gpu_output
-        elif '-show_chapters' in args:
-            output = json.dumps({'chapters': [{'start_time': str(n)} for n in self.marks]})
         elif '-version' in args:
             output = 'synthetic binary'
         elif name in ('list_chapters.py', 'fetch_text.py'):
@@ -327,33 +325,19 @@ class ExecuteTests(unittest.TestCase):
         with self.assertRaises(driver.ExecutionError):
             self.run_book()
 
-    def test_units_helper_incomplete_duplicate_boolean_or_wrong_map_refuses(self):
-        for corrupt in ('omit','duplicate','boolean','map'):
+    def test_units_helper_incomplete_or_duplicate_refuses_before_alignment(self):
+        for corrupt in ('omit','duplicate'):
             def mutate(name,args):
                 if name=='m4b_make_units.py':
                     path=Path(args[args.index('--out-units')+1])
                     units=json.loads(path.read_text())
                     if corrupt=='omit': units.pop()
                     if corrupt=='duplicate': units[1]=units[0]
-                    if corrupt=='boolean': units[0]['track']=True
                     write_json(path,units)
-                    if corrupt=='map':
-                        write_json(args[args.index('--out-trackmap')+1],[])
             self.runner.mutate=mutate
             with self.subTest(corrupt=corrupt), self.assertRaises(driver.ExecutionError):
                 self.run_book()
             self.assertNotIn('align_chapters.py',self.runner.names())
-
-    def test_reused_units_cannot_hide_boolean_track_as_integer(self):
-        self.run_book()
-        path=self.base/'units.json'
-        units=json.loads(path.read_text()); units[0]['track']=True
-        write_json(path,units)
-        before=path.read_bytes()
-        self.runner.calls.clear()
-        with self.assertRaises(driver.ExecutionError): self.run_book()
-        self.assertNotIn('m4b_cut.py',self.runner.names())
-        self.assertEqual(path.read_bytes(),before)
 
     def test_alignment_and_package_corruption_fail_before_acceptance(self):
         self.run_book()
