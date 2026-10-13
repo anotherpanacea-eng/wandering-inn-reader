@@ -161,6 +161,11 @@ def _audio_roster(directory, suffix, count, *, complete):
 
 def _alignments(directory, chapters, lines, units, *, complete):
     from schema import validate_doc
+    from align_chapters import slug
+    for i, chapter in enumerate(chapters):
+        text_path = Path(directory)/f"chap{i:02d}_{slug(chapter['title'])}.txt"
+        if text_path.is_symlink():
+            raise ExecutionError('align: chapter-text symlink redirect; preserve and inspect')
     by_index = {}
     for path in Path(directory).glob('*.json'):
         match = re.fullmatch(r'chap(\d+)_.*\.json', path.name)
@@ -251,12 +256,12 @@ def execute(manifest, *, command=None):
     paths = build_plan(manifest)['artifacts']
     env = os.environ.copy()
     try:
-        if any((p/'.git').exists() or (p/'.git').is_symlink() for p in (base,*base.parents)):
-            raise ExecutionError('work directory: keep private book artifacts outside Git')
         if any(p.lower()=='dropbox' for p in base.parts):
             raise ExecutionError('work directory: active book caches must stay outside Dropbox')
         for path in [*paths.values(), str(base/'probe.log'), str(base/'verify.log')]:
             target = Path(path)
+            if any((p/'.git').exists() or (p/'.git').is_symlink() for p in (target,*target.parents)):
+                raise ExecutionError('work directory: keep private book artifacts outside Git')
             if target.is_symlink() or any(p.is_symlink() for p in target.parents):
                 raise ExecutionError('work directory: symlink artifact redirects are refused')
         if Path(manifest['manifest']).resolve() in {Path(v).resolve() for v in [*paths.values(), str(base/'probe.log'), str(base/'verify.log')]}:
