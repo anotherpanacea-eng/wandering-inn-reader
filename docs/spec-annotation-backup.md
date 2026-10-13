@@ -103,8 +103,13 @@ Matching ignores incoming IDs/revisions and compares exact kind, start/end,
 label and note. For each content tuple, match incoming occurrences one-to-one
 against existing identical occurrences first. These are exact duplicates and are
 skipped; excess incoming copies are considered separately, preserving intentional
-duplicate multiplicity. Thus restoring the same file again adds nothing once its
-selected contents are present. Incoming file order decides matching and allocation;
+duplicate multiplicity. Restoring the same file adds nothing once every incoming
+content tuple has at least its incoming multiplicity locally. A partial selection
+does not meet that guarantee: with two identical incoming entries, skipping one
+and adding one leaves one duplicate and one excess new entry on the next preview.
+That excess entry is selected by default again and still requires explicit Apply;
+the preview exposes it rather than remembering earlier skip choices. Incoming file
+order decides matching and allocation;
 no sorting or normalization changes strings or anchors.
 
 An unmatched incoming entry with no local item at the same kind/start/end is new
@@ -166,7 +171,11 @@ or permanent verification machinery. Prove these behaviors with invented text:
 1. A download preserves bookmark/highlight/note values including Unicode, empty
    text, cross-segment canonical ranges and intentional duplicate multiplicity.
    A second device with the same stable book/source restores them with fresh
-   local IDs; exporting empty annotations works. Repeated restore is a no-op.
+   local IDs; exporting empty annotations works. Repeated full restore is a no-op
+   once all incoming multiplicities are present. With two identical incoming
+   entries, skip one/add one, reopen preview and verify one duplicate plus one
+   excess new entry selected by default; Cancel leaves the first restore unchanged,
+   and a second explicit Apply adds the remaining occurrence.
 2. Wrong book with same title, changed projection of identical source bytes,
    reordered segments, different fallback identity, malformed/unknown/oversize
    file, invalid ranges/surrogates, excessive values and malformed local data
