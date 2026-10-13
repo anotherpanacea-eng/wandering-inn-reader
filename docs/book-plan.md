@@ -53,9 +53,11 @@ Unavailable, nonzero, empty, malformed or competing-process status fails before
 model loading. Alignment alone receives child `WI_PREFLIGHT_MAX_PY=2` for its
 known driver parent; no unrelated jobs are permitted. No processes are killed.
 Alignment retains its existing 1800-second in-chapter pause cadence, 30-second
-cooldown and 45-second between-chapter pause. Its current smartctl device default
-is `/dev/sdb`; confirm actual hardware before a real run rather than assuming a
-post-swap device or a watchdog is configured.
+cooldown and 45-second between-chapter pause. The drive-temperature watchdog stays
+opt-in: pass `--smartctl PATH` (and `--smartctl-dev DEVICE`, default `/dev/sdb`) to
+`--execute` and they are forwarded to alignment. Without `--smartctl`, alignment runs
+with fixed cooldowns only. Confirm the actual device before a real run rather than
+assuming a post-swap device.
 
 With `map.confirmed=false`, execution lists the official TOC range, acquires its
 complete ordered chapter roster, validates text/marker sentence conservation and

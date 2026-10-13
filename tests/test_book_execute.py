@@ -176,6 +176,17 @@ class ExecuteTests(unittest.TestCase):
         self.assertTrue(all(k['cwd']==str(self.base) for _,k in self.runner.calls))
         self.assertFalse((self.base/'unused destination').exists())
 
+    def test_watchdog_flags_reach_alignment_only_when_supplied(self):
+        self.run_book()
+        align = next(a for a,_ in self.runner.calls if a[0]==sys.executable and Path(a[1]).name=='align_chapters.py')
+        self.assertNotIn('--smartctl', align)
+        self.runner.calls.clear()
+        write_json(self.path, self.data)
+        with contextlib.redirect_stdout(io.StringIO()):
+            driver.execute(load_manifest(self.path), command=self.runner, smartctl='C:/tools/smartctl.exe', smartctl_dev='/dev/sdc')
+        align = next(a for a,_ in self.runner.calls if a[0]==sys.executable and Path(a[1]).name=='align_chapters.py')
+        self.assertEqual(align[align.index('--smartctl')+1:align.index('--smartctl')+4], ['C:/tools/smartctl.exe','--smartctl-dev','/dev/sdc'])
+
     def test_gate_a_acquires_and_holds_then_confirmed_never_refetches(self):
         self.data['map']['confirmed'] = False
         for name in ('chapter-urls.txt','text.txt','text.chapters.json'):
@@ -441,8 +452,10 @@ class ExecuteTests(unittest.TestCase):
         write_json(self.path,self.data)
         with patch.object(driver,'execute',return_value={'state':'gate-a-required'}), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(driver.main([str(self.path),'--execute']),3)
-        with patch.object(driver,'execute',return_value={'state':'prepared-local'}), contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(driver,'execute',return_value={'state':'prepared-local'}) as run, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(driver.main([str(self.path),'--execute']),0)
+            self.assertEqual(driver.main([str(self.path),'--execute','--smartctl','smartctl','--smartctl-dev','/dev/sdc']),0)
+            self.assertEqual(run.call_args.kwargs, {'smartctl':'smartctl','smartctl_dev':'/dev/sdc'})
         with patch.object(driver,'execute',side_effect=driver.ExecutionError('invented')), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as error: driver.main([str(self.path),'--execute'])
             self.assertEqual(error.exception.code,2)

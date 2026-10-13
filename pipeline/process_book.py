@@ -249,8 +249,12 @@ def _verification(output, count):
     return flags
 
 
-def execute(manifest, *, command=None):
-    """Only the existing explicit m4b/live route; no approval latch or delivery."""
+def execute(manifest, *, command=None, smartctl=None, smartctl_dev=None):
+    """Only the existing explicit m4b/live route; no approval latch or delivery.
+
+    smartctl/smartctl_dev pass through to align_chapters.py's drive-temperature
+    watchdog; without smartctl, alignment runs with fixed cooldowns only, as before.
+    """
     command = command or _command
     base = Path(manifest['work_directory']).resolve()
     paths = build_plan(manifest)['artifacts']
@@ -329,8 +333,10 @@ def execute(manifest, *, command=None):
         stage('m4b_cut.py',['--m4b',str(audio),'--units',paths['units'],'--outdir',paths['wav'],'--ext','wav','--ffmpeg',FFMPEG])
         _audio_roster(paths['wav'],'.wav',len(chapters),complete=True)
         child_env = {**env,'WI_PREFLIGHT_MAX_PY':'2'}
+        watchdog = ['--smartctl',smartctl,*(['--smartctl-dev',smartctl_dev] if smartctl_dev else [])] if smartctl else []
         stage('align_chapters.py',['--audio-glob',str(Path(paths['wav'])/'*.wav'),'--text',paths['text'],
-              '--track-map',paths['track_map'],'--outdir',paths['alignments'],'--auto-wps','--device','cuda'],model=True,child_env=child_env)
+              '--track-map',paths['track_map'],'--outdir',paths['alignments'],'--auto-wps','--device','cuda',*watchdog],
+              model=True,child_env=child_env)
         _alignments(paths['alignments'],chapters,lines,units,complete=True)
         stage('m4b_cut.py',['--m4b',str(audio),'--units',paths['units'],'--outdir',paths['package'],'--ext','m4a','--ffmpeg',FFMPEG])
         stage('m4b_package.py',['--units',paths['units'],'--per-chapter',paths['alignments'],'--out',paths['package'],'--book-title',manifest['title']])
@@ -360,10 +366,15 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--plan', action='store_true', help='describe only; reads only the manifest')
     mode.add_argument('--execute', action='store_true', help='explicit local execution; no delivery')
+    parser.add_argument('--smartctl', help="smartctl path for alignment's drive-temperature watchdog")
+    parser.add_argument('--smartctl-dev', help="smartctl device to protect (align_chapters.py default: /dev/sdb)")
     args = parser.parse_args(argv)
+    if args.smartctl_dev and not args.smartctl:
+        parser.error('--smartctl-dev requires --smartctl')
     try:
         manifest = load_manifest(args.manifest)
-        plan = build_plan(manifest) if args.plan else execute(manifest)
+        plan = (build_plan(manifest) if args.plan
+                else execute(manifest, smartctl=args.smartctl, smartctl_dev=args.smartctl_dev))
     except (ManifestError, ExecutionError) as error:
         parser.error(str(error))
     print(json.dumps(plan, indent=2))
