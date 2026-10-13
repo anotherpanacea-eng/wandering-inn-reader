@@ -21,7 +21,7 @@ alignment JSON and local folder playlists. Demo, Dropbox/URL playlists, unsaved
 sessions and old audio Resume sessions remain readable/playable but annotation-
 unavailable until explicitly admitted from local files. No remote prefetch or
 annotation upload, automatic association with text-library books, timestamp-only
-notes, cross-track drag selections, audio backup, library sync, pipeline changes,
+notes, cross-track drag selections, library sync, pipeline changes,
 TTS, new headless harness or media-storage expansion.
 
 Main's `createLibraryStore` stores text records in IndexedDB `books`, with version1
@@ -44,16 +44,15 @@ Backup/restore spec [draft #73](https://github.com/anotherpanacea-eng/wandering-
 (head `82259f5406b40b46a3d9c229a113c57563d0e406`) and implementation
 [draft #74](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/74) are
 independent held drafts, absent from this base. This spec builds on main alone;
-no dependency or implicit stack. If combined later, backup/restore remains saved
-**text** only and visibly unavailable for audio; do not infer audio support from a
-shared annotation envelope. Any audio backup extension needs its own reviewed
-contract. The active m4b executor owns pipeline/test/check paths separately.
+no dependency or implicit stack. If combined later, no audio-specific backup rule
+is needed: the audio book's annotationSession carries its identity and flattened
+source, so #74's identity+digest matching applies unchanged. The active m4b
+executor owns pipeline/test/check paths separately.
 
 ## 2. Explicit local admission and identity
 
-Offer **Save audiobook for notes** for a playable local session. Pause on activation
-and remain paused after success/failure; Play is explicit. Validate the entire selected
-package before any library write. Capture package ownership and `loadEpoch`; a newer
+Offer **Save audiobook for notes** for a playable local session. Validate the entire
+selected package before any library write. Capture package ownership and `loadEpoch`; a newer
 book/file selection cancels an old admission, including queued work before its
 transaction starts. Save failure leaves the prior library and selector intact, with
 an inline “Not saved” reason; current playback/transcript remain usable.
@@ -72,17 +71,9 @@ Read/validate every selected alignment doc once for admission. Require validateD
 success and nondecreasing segment start times (equal starts are allowed). Preserve
 track order, segment order and every exact text string, including empty text. Use
 known schema fields only in the saved documents; do not retain arbitrary imported
-properties. Proposed resource limits for this increment: 1000 tracks; 1 MiB for
-manifest.json, 100 MiB per sync file and 256 MiB total selected JSON bytes (manifest
-plus selected sync files; without a manifest, count sync files only); 250000 total segments, 100000 UTF16
-units per segment, 16000000 total text units and 25000 total chapters. Refuse before
-reading/parsing any file exceeding its byte cap, and before further selected JSON
-reads/parses if their known File.size sum would exceed the total. Exact byte-cap
-boundaries are allowed; one byte over refuses before read/parse or admission mutation.
-Structural/text bounds refuse before mutation; never shorten the book. The manifest
-cap is a deliberate proposed product limit; the other bounds reuse generic-ingest
-scales rather than introducing an unbounded whole-book parse. Audio bytes are not
-read for identity or stored by this increment.
+properties. One resource bound: refuse before reading/parsing when the selected JSON
+files (manifest plus selected sync files) total more than 256 MiB by File.size; never
+shorten the book. Audio bytes are not read for identity or stored by this increment.
 
 Identity is `audio-text-v1:` plus lowercase SHA256 hex of UTF8 encoding of
 `JSON.stringify(tracks.map(d => d.segments.map(s => s.text)))`. Compute outside an
@@ -112,8 +103,8 @@ Audio has no `doc` or cover. Existing text record shape stays intact. Validate t
 union at each storage/UI entry point; derive a flattened segments source in memory
 from audio tracks rather than storing another copy of its text. The cumulative
 segment count maps each global source segment to exactly one track/local segment.
-Validate audio bounds on persisted records too; malformed rows are visibly unreadable
-and removable without blocking healthy books. Older Reader builds may display new
+Malformed persisted rows are visibly unreadable and removable without blocking
+healthy books. Older Reader builds may display new
 audio rows as unreadable; they must not be needed to manipulate those rows.
 
 Successful save/open transaction sets `session/resume` to
@@ -172,9 +163,7 @@ stabilize source rendering. Map only when concatenated DOM source text equals ex
 segments[].text; otherwise refuse the selection visibly and let the reader select
 again while paused. Never map reconstructed `w + " "` text onto the source by guess.
 Opening Notes without a usable selection must still allow listing/editing existing
-items. Stay paused on close, cancel and failed save. Block transport, headset play,
-ended auto-next and follow updates while the Notes sheet/editor owns the view;
-Play after closing releases that ownership normally. Search navigation and Notes
+items. Stay paused on close, cancel and failed save. Search navigation and Notes
 navigation must cancel each other's pending view changes.
 
 For an annotation-enabled audio session, rendered paragraphs must preserve exact
@@ -226,15 +215,15 @@ for these browser behaviors; a new headless harness is not admitted. Minimum mat
 | --- | --- |
 | One local single-track book and a two-track manifest book | Explicit save enables notes; shelf/reload reopen preserves them and requires local audio reselection. Unsaved/demo/remote/legacy audio explains unavailability. |
 | Stable identity | Renames/retiming keep notes; same title different text, reordered/repartitioned tracks and text-book identity remain separate. Same transcript renditions intentionally share notes. Digest/random support failure leaves ordinary playback intact. |
-| Complete admission | Missing/duplicate/ambiguous pairs, malformed manifest or later-track JSON, unsorted segment starts and each resource-bound edge refuse without partial saved book or selector mutation. Exercise manifest exactly 1 MiB and one byte over, and combined manifest + sync JSON exactly 256 MiB and one byte over; oversize refuses before read/parse or admission mutation. Without a manifest, only selected sync bytes count toward the total. |
+| Complete admission | Missing/duplicate/ambiguous pairs, malformed manifest or later-track JSON, unsorted segment starts and an over-cap selection refuse without partial saved book or selector mutation. |
 | Source anchors | Forward/backward multisegment selection, empty segments and emoji boundaries round-trip. Mixed heading/control and altered timed-token DOM refuse without shortened selection. Bookmark targets proved-visible source text in pages/scroll. |
-| Playback and marks | Open Notes while playing, pause/edit/save/cancel/close, then explicit Play. No auto-next/headset play/follow displaces the editor; exact text and overlapping marks survive sentence/word glow, search and relayout. Token mismatch uses sentence glow. |
+| Playback and marks | Open Notes while playing pauses; edit/save/cancel/close, then explicit Play. Exact text and overlapping marks survive sentence/word glow, search and relayout. Token mismatch uses sentence glow. |
 | Whole-book navigation | List notes from both tracks; navigate to exact source offset paused with/without audio, with approximate segment-start seek. Rapid competing track/book/navigation loads cannot publish stale view or bind wrong notes. |
 | Ownership and concurrency | Independent tabs create distinct IDs; stale item edit/delete conflicts retain form; delete/reimport with same identity refuses old lifetime. Same-transcript timing update preserves notes; position save cannot clobber notes or resurrect deletion. |
 | Atomic failures | Real IndexedDB request-success then transaction-abort, quota/denial, failed deletion, stale queued admission and unsupported crypto preserve previous data/selector and show no Saved success. Reload verifies durable state. |
-| Compatibility | Existing text annotations/library/resume, local unbound playback and legacy audio Resume remain usable. If stacked with #74, audio cannot export/import through its text-only backup controls. |
+| Compatibility | Existing text annotations/library/resume, local unbound playback and legacy audio Resume remain usable. |
 
-Pure Node checks protect identity/partition mapping, strict admission bounds, source
+Pure Node checks protect identity/partition mapping, strict admission, source
 ranges and storage policy at existing seams. Actual browser checks establish
 Selection/DOM, IndexedDB rollback/lifetimes, media event races, file reattachment,
 keyboard focus and source geometry. Do not count a source grep or mocked success as
