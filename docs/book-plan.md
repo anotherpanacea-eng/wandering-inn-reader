@@ -38,9 +38,9 @@ configured GPU Python interpreter, one-job posture and thermal/watchdog setup.
 This code's synthetic gate does not qualify a processed audiobook, GPU runtime,
 phone playback or delivery. It does not authorize inference, downloads or spend.
 Keep the manifest and all book artifacts outside Git and outside Dropbox while
-caches are active. Execution refuses a working directory with a Dropbox path
-component; the owner remains responsible for choosing an unsynchronized, non-Git
-private directory. The existing
+caches are active. Execution refuses a working directory inside a Git checkout
+(a `.git` entry in it or any parent) or with a Dropbox path component; the owner
+remains responsible for choosing an unsynchronized private directory. The existing
 20-second audio / 500-word prose repository limits remain unchanged.
 
 From that private manifest directory, use the configured ROCm Python3.12

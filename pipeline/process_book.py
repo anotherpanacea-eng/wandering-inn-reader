@@ -249,6 +249,9 @@ def execute(manifest, *, command=None, smartctl=None, smartctl_dev=None):
     try:
         if any(p.lower()=='dropbox' for p in base.parts):
             raise ExecutionError('work directory: active book caches must stay outside Dropbox')
+        # Public repo: chapter text inside a checkout could be committed and pushed.
+        if any(os.path.lexists(p/'.git') for p in (base, *base.parents)):
+            raise ExecutionError('work directory: keep private book artifacts outside Git')
         audio = Path(manifest['audio']['m4b'])
         if audio.suffix.lower() != '.m4b' or not audio.is_file() or audio.stat().st_size<=0:
             raise ExecutionError('audio: explicit nonempty local m4b required')

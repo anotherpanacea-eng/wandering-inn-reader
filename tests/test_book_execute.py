@@ -471,6 +471,11 @@ class ExecuteTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout),['value Ω with spaces','0,1','--boolean'])
         self.assertEqual(log.read_text(encoding='utf-8'),result.stdout)
 
+    def test_work_directory_inside_git_checkout_refuses_before_any_stage(self):
+        (self.base/'.git').mkdir()
+        with self.assertRaises(driver.ExecutionError): self.run_book()
+        self.assertEqual(self.runner.calls,[])
+
     def test_active_caches_refuse_dropbox_work_directory(self):
         write_json(self.path,self.data)
         manifest=load_manifest(self.path); manifest['work_directory']=str(self.base/'Dropbox')
