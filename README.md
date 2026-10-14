@@ -4,6 +4,12 @@ Listen to the Parsneau narration and read the same words in sync, on your phone.
 Built for following along with *The Wandering Inn*, but it works for any
 audiobook you have the text for.
 
+> **Status: v1.0, development paused (owner, 2026-10-13).** The player, read-along
+> sync, search, notes and source progress are complete for their purpose and stay
+> as they are. Parked, not planned: annotation backup and restore (#73, #74),
+> annotations during audiobook playback (#76), generated-voice playback (#32) and
+> Audible file sync (#26).
+
 Use **Search** to find a literal phrase in the open book, then choose a result to reveal it in scroll or paged mode. Audio search leaves playback paused. Queries stay transient; see [local search](docs/search-phase3.md) for matching and result limits. Search is Phase3A. Saved text-library books also offer **Notes** for bookmarks, highlights and local notes; see [annotations](docs/annotations-phase3.md). Saved text books show source position and a fixed-pace time-left estimate, with an explicit Finish book action; see [source progress](docs/progress-phase3.md). Other wayfinding work remains separate.
 
 Two pieces:
