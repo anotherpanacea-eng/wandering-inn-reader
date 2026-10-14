@@ -11,8 +11,10 @@ operator's SETEC / APODICTIC fleet by **shared machines** (GPU work on Code-PC) 
 dependency chain**: there is no cross-repo dependency, no vendored contract, no weekly-sync
 bot. Do **not** bolt the fleet's vendor/lock/drift-gate machinery onto it; the right move
 here is restraint (the same instinct that says "don't build a shared library for two
-consumers"). The operator's local `Cowork/repo-fleet/` hub documents the fleet (this repo
-is registered under "Beyond the four core repos"), and is invisible to cloud containers.
+consumers"). The operator's private fleet hub in Dropbox (`80-89 Projects/81 Software & tools/81.11 Repo fleet/`,
+moved from the retired `Cowork/repo-fleet/` on 2026-10-11) documents the fleet (this repo is
+registered under "Beyond the four core repos"). Cloud containers see it only when the Dropbox
+connector is attached; never copy private hub content into this repo.
 
 **Cloud-reachable coordination hub** (added 2026-07-19):
 [`anotherpanacea-eng/fleet-coordination`](https://github.com/anotherpanacea-eng/fleet-coordination)
