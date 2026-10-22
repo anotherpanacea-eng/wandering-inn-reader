@@ -70,6 +70,8 @@ echo "→ local-search source-offset behavioral test (mandatory, no skips)"
 "$PYTHON" tools/run_node_tests.py tests/test_search.mjs
 echo "Annotation source-range and persistence contract tests (mandatory, no skips)"
 "$PYTHON" tools/run_node_tests.py tests/test_annotations.mjs
+echo "Annotation backup and previewed restore tests (mandatory, no skips)"
+"$PYTHON" tools/run_node_tests.py tests/test_annotation_backup.mjs
 
 echo "Source-progress tests (mandatory, no skips)"
 "$PYTHON" tools/run_node_tests.py tests/test_progress.mjs
