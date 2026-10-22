@@ -1,6 +1,6 @@
 # Annotation backup and restore: one saved book
 
-Status: proposed; independent spec review required before implementation.
+Status: implemented (#74), landed with this spec in the 2026-10-22 train.
 Tracking: [Fleet task #700](https://github.com/anotherpanacea-eng/fleet-coordination/issues/700).
 Owner admission: Fleet capacity-window decision, 2026-10-11, small spec card.
 Verified base: Reader main `23dd094d064f32c40d7720541652aefbaebe7b78`.

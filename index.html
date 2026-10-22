@@ -1755,7 +1755,7 @@
     annotationBackupStatus="Preparing backup…";annotationBackupSetBusy(true);
     try{const data=await library.annotations(ctx),hash=await annotationSourceDigest(ctx.source);if(!annotationCurrent(ctx))return;
       const bytes=annotationBackupBytes(ctx.identity,hash,data,ctx.source),url=URL.createObjectURL(new Blob([bytes],{type:"application/json"}));
-      try{const link=el("a",{href:url,download:"inn-reader-annotations.json"});document.body.appendChild(link);try{link.click();}finally{link.remove();}}finally{setTimeout(()=>URL.revokeObjectURL(url),1000);}
+      try{const link=el("a",{href:url,download:"inn-reader-annotations.json"});document.body.appendChild(link);try{link.click();}finally{link.remove();}}finally{setTimeout(()=>URL.revokeObjectURL(url),60000);}  // iOS Safari can still be reading the blob behind its save prompt after 1 s
       annotationBackupStatus="Download requested. This file contains notes; keep it somewhere private."+(sourceIdentityStable&&ctx.identity.startsWith("generic-v1:")?"":" This identity can restore only where the exact saved book identity already exists.");
     }catch(e){if(annotationCurrent(ctx))annotationBackupStatus=annotationBackupError(e.message);}
     finally{if(annotationCurrent(ctx)){annotationBackupSetBusy(false);$("#annotationExport")?.focus();}}
