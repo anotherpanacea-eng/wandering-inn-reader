@@ -861,6 +861,37 @@
     out.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);const merged=[];for(const r of out){const last=merged.at(-1);if(last&&r[0]<=last[1])last[1]=Math.max(last[1],r[1]);else merged.push(r.slice());}return merged;
   }
   // ANNOTATIONS_END
+  // ANNOTATION_BACKUP_BEGIN
+  const ANNOTATION_BACKUP_LIMIT=64*1048576;
+  function annotationTuple(item,content=true){return JSON.stringify([item.kind,item.start.seg,item.start.offset,item.end?.seg??null,item.end?.offset??null,...(content?[item.label,item.note]:[])]);}
+  async function annotationSourceDigest(source,digest=globalThis.crypto?.subtle){
+    if(!digest||typeof digest.digest!=="function")throw new Error("DIGEST");
+    try{const bytes=new TextEncoder().encode(JSON.stringify(source.map(x=>x.text))),hash=new Uint8Array(await digest.digest("SHA-256",bytes));return Array.from(hash,x=>x.toString(16).padStart(2,"0")).join("");}catch(e){throw new Error("DIGEST");}
+  }
+  function annotationBackupData(file,identity,hash,source){
+    if(!annotationKeys(file,["format","version","bookIdentity","sourceSha256","annotations"])||file.format!=="inn-reader-annotations"||file.version!==1||typeof file.bookIdentity!=="string"||typeof file.sourceSha256!=="string"||!/^[0-9a-f]{64}$/.test(file.sourceSha256))throw new Error("FILE");
+    if(file.bookIdentity!==identity)throw new Error("BOOK");if(file.sourceSha256!==hash)throw new Error("SOURCE");annotationData(file.annotations,source);return file;
+  }
+  function annotationBackupParse(bytes){
+    if(bytes.byteLength>ANNOTATION_BACKUP_LIMIT)throw new Error("FILE_LIMIT");
+    try{return JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes));}catch(e){throw new Error("FILE");}
+  }
+  function annotationBackupBytes(identity,hash,data,source){
+    const file=annotationBackupData({format:"inn-reader-annotations",version:1,bookIdentity:identity,sourceSha256:hash,annotations:data},identity,hash,source),bytes=new TextEncoder().encode(JSON.stringify(file));
+    if(bytes.byteLength>ANNOTATION_BACKUP_LIMIT)throw new Error("FILE_LIMIT");return bytes;
+  }
+  function annotationBackupPreview(data,incoming,source){
+    annotationData(data,source);annotationData(incoming,source);const counts=new Map(),anchors=new Map();for(const item of data.items){const key=annotationTuple(item),anchor=annotationTuple(item,false);counts.set(key,(counts.get(key)||0)+1);if(!anchors.has(anchor))anchors.set(anchor,new Set());anchors.get(anchor).add(key);}
+    return incoming.items.map(item=>{const key=annotationTuple(item),count=counts.get(key)||0;if(count){counts.set(key,count-1);return {item,type:"duplicate"};}
+      return {item,type:[...(anchors.get(annotationTuple(item,false))||[])].some(k=>k!==key)?"conflict":"new"};});
+  }
+  // Recomputed against the latest saved annotations inside the write transaction;
+  // restore only appends, so nothing saved after the preview can be overwritten.
+  function annotationBackupMerge(data,source,incoming,addConflicts){
+    const additions=annotationBackupPreview(data,incoming,source).filter(x=>x.type==="new"||(addConflicts===true&&x.type==="conflict")),count=additions.length;if(data.items.length+count>1000||count>Number.MAX_SAFE_INTEGER-data.nextId)throw new Error("LIMIT");
+    const next=JSON.parse(JSON.stringify(data));for(const row of additions){const item=JSON.parse(JSON.stringify(row.item));item.id=next.nextId++;item.revision=1;next.items.push(item);}return annotationData(next,source);
+  }
+  // ANNOTATION_BACKUP_END
   // PROGRESS_BEGIN
   function progressEnd(source){for(let i=source.length-1;i>=0;i--)if(source[i].text.length)return {seg:i,offset:source[i].text.length};return null;}
   function progressPoint(source,p){return annotationPoint(source,p);}
@@ -990,7 +1021,7 @@
           if(!ctx.current()||!r||!annotationInstanceValid(ctx.instance)||r.annotationInstance!==ctx.instance)throw new Error("STALE");
           valid(r);if(!annotationSourceEqual(r.doc.segments,ctx.source))throw new Error("SOURCE");
           const data=annotationStored(r);
-          if(op){r.annotations=annotationChange(data,r.doc.segments,op);tx.objectStore("books").put(r);done(r.annotations);}else done(data);
+          if(op){r.annotations=op.action==="restore"?annotationBackupMerge(data,r.doc.segments,op.incoming,op.addConflicts):annotationChange(data,r.doc.segments,op);tx.objectStore("books").put(r);done(r.annotations);}else done(data);
         });
       }),
       position:(id,value,ctx=null)=>transaction("readwrite",(tx,read,done)=>{
@@ -1635,7 +1666,7 @@
   }
 
 
-  let annotationSession=null,annotationItems=[],annotationProblem="",annotationBusy=false,annotationEditor=null,annotationCapture=null,annotationRefresh=0;
+  let annotationSession=null,annotationItems=[],annotationProblem="",annotationBusy=false,annotationEditor=null,annotationCapture=null,annotationRefresh=0,annotationBackupState=null,annotationBackupStatus="";
   function annotationMessage(code){return ({RANGE:"Select only complete book text; selections containing headings or controls are unavailable.",DATA:"Annotations unavailable: saved annotation data is unreadable.",LIMIT:"Not saved: use at most 1000 annotations, 120 label characters and 8192 note units.",CONFLICT:"Not saved: this annotation changed. Reload annotations, then open a new edit. Your unsaved text is kept.",STALE:"Annotations unavailable: reopen this saved book before trying again.",SOURCE:"Annotations unavailable: the saved book text changed. Reopen the book.",STORAGE:"Not saved: storage did not complete. Your unsaved text is kept."})[code]||"Not saved: storage did not complete. Your unsaved text is kept.";}
   function annotationCurrent(ctx){return !!ctx&&ctx===annotationSession&&ctx.generation===searchGeneration&&mode==="text"&&librarySaved&&ctx.identity===sourceIdentity;}
   function annotationAvailability(){
@@ -1644,7 +1675,7 @@
     const status=$("#annotationAvailability");status.textContent=reason;status.hidden=!reason||!readerReady();return reason;
   }
   function resetAnnotations(){
-    ++annotationRefresh;annotationSession=null;annotationItems=[];annotationProblem="";annotationBusy=false;annotationEditor=null;annotationCapture=null;
+    ++annotationRefresh;annotationSession=null;annotationItems=[];annotationProblem="";annotationBusy=false;annotationEditor=null;annotationCapture=null;annotationBackupState=null;annotationBackupStatus="";
     if(sheetKind==="annotations")closeSheet();
     annotationAvailability();
   }
@@ -1707,7 +1738,7 @@
     annotationBusy=true;for(const n of $("#sheet").querySelectorAll("#annotationLabel,#annotationNote"))n.disabled=true;$("#annotationSave")?.setAttribute("disabled","");for(const n of $("#sheet").querySelectorAll("[data-annotation-action]"))n.disabled=true;annotationStatus("Saving…");
     try{const data=await queueLibrary(()=>library.annotations(ctx,op));if(!annotationCurrent(ctx))return;annotationItems=data.items;annotationProblem="";annotationEditor=null;renderAnnotationMarks();if(sheetKind==="annotations"){renderAnnotations();annotationStatus("Saved on this device.");}}
     catch(e){if(annotationCurrent(ctx)){if(editor){editor.label=$("#annotationLabel")?.value??editor.label;editor.note=$("#annotationNote")?.value??editor.note;}annotationStatus(annotationMessage(e.message));}}
-    finally{if(annotationCurrent(ctx)){annotationBusy=false;for(const n of $("#sheet").querySelectorAll("#annotationLabel,#annotationNote"))n.disabled=false;$("#annotationSave")?.removeAttribute("disabled");for(const n of $("#sheet").querySelectorAll("[data-annotation-action]"))n.disabled=false;if(sheetKind==="annotations"&&!annotationEditor)$("#annotationBookmark")?.focus();}}
+    finally{if(annotationCurrent(ctx)){annotationBusy=false;for(const n of $("#sheet").querySelectorAll("#annotationLabel,#annotationNote"))n.disabled=false;$("#annotationSave")?.removeAttribute("disabled");for(const n of $("#sheet").querySelectorAll("[data-annotation-action]"))n.disabled=false;if(sheetKind==="annotations"&&!annotationEditor){const message=$("#annotationStatus")?.textContent;renderAnnotations();if(message)annotationStatus(message);$("#annotationBookmark")?.focus();}}}
   }
   async function navigateAnnotation(item){
     const ctx=annotationSession;if(!annotationCurrent(ctx))return;
@@ -1717,15 +1748,59 @@
       const rd=$("#reader");if(paged){setPage(info.col);goToCol(info.col,false);}else{const old=rd.style.scrollBehavior;rd.style.scrollBehavior="auto";rd.scrollTop+=info.rect.top-rd.getBoundingClientRect().top-12;rd.style.scrollBehavior=old;setPage(pageOf(curSeg));}progressGesture=false;retainProgress(fresh.start);save(true);
     }catch(e){if(annotationCurrent(ctx))annotationStatus(e.message==="GEOMETRY"?"Unable to show this annotation.":annotationMessage(e.message));}
   }
+  function annotationBackupError(code){return ({DIGEST:"Backup and restore require browser SHA-256 support. Ordinary notes remain available.",FILE:"Invalid annotation backup file.",FILE_LIMIT:"Backup files must be at most 64 MiB.",BOOK:"This backup belongs to a different book. Import and open its original book first.",SOURCE:"This backup's source text differs. No annotations were changed.",STALE:"This book session changed. Reopen the saved book and choose the backup again.",DATA:"Annotation data is unreadable. No annotations were changed.",LIMIT:"The additions would exceed the 1000-annotation or ID limit. Nothing was restored.",STORAGE:"Storage did not complete. Nothing was restored; the preview is kept for retry."})[code]||"Backup or restore did not complete. No annotation changes were confirmed.";}
+  function annotationBackupSetBusy(value){annotationBusy=value;if(sheetKind==="annotations")renderAnnotations();}
+  async function exportAnnotationBackup(){
+    const ctx=annotationSession;if(annotationBusy||annotationEditor||annotationProblem||!annotationCurrent(ctx))return;
+    annotationBackupStatus="Preparing backup…";annotationBackupSetBusy(true);
+    try{const data=await library.annotations(ctx),hash=await annotationSourceDigest(ctx.source);if(!annotationCurrent(ctx))return;
+      const bytes=annotationBackupBytes(ctx.identity,hash,data,ctx.source),url=URL.createObjectURL(new Blob([bytes],{type:"application/json"}));
+      try{const link=el("a",{href:url,download:"inn-reader-annotations.json"});document.body.appendChild(link);try{link.click();}finally{link.remove();}}finally{setTimeout(()=>URL.revokeObjectURL(url),60000);}  // iOS Safari can still be reading the blob behind its save prompt after 1 s
+      annotationBackupStatus="Download requested. This file contains notes; keep it somewhere private."+(sourceIdentityStable&&ctx.identity.startsWith("generic-v1:")?"":" This identity can restore only where the exact saved book identity already exists.");
+    }catch(e){if(annotationCurrent(ctx))annotationBackupStatus=annotationBackupError(e.message);}
+    finally{if(annotationCurrent(ctx)){annotationBackupSetBusy(false);$("#annotationExport")?.focus();}}
+  }
+  async function prepareAnnotationRestore(file){
+    const ctx=annotationSession;if(annotationBusy||annotationEditor||annotationProblem||!annotationCurrent(ctx))return;
+    annotationBackupStatus="Reading backup and preparing preview…";annotationBackupSetBusy(true);
+    try{if(file.size>ANNOTATION_BACKUP_LIMIT)throw new Error("FILE_LIMIT");const incoming=annotationBackupParse(await file.arrayBuffer());
+      const hash=await annotationSourceDigest(ctx.source);annotationBackupData(incoming,ctx.identity,hash,ctx.source);
+      const data=await library.annotations(ctx);if(!annotationCurrent(ctx))return;
+      annotationBackupState={ctx,file:incoming,rows:annotationBackupPreview(data,incoming.annotations,ctx.source),existing:data.items.length,nextId:data.nextId,addConflicts:false};annotationBackupStatus="Preview only. Restore merges entries; it does not rewind edits or delete current notes.";
+    }catch(e){if(annotationCurrent(ctx)){annotationBackupState=null;annotationBackupStatus=annotationBackupError(e.message);}}
+    finally{if(annotationCurrent(ctx)){annotationBackupSetBusy(false);$("#annotationRestoreApply,#annotationRestoreFile")?.focus();}}
+  }
+  async function applyAnnotationRestore(){
+    const state=annotationBackupState,ctx=state?.ctx;if(annotationBusy||!state||!annotationCurrent(ctx))return;
+    annotationBackupStatus="Restoring…";annotationBackupSetBusy(true);
+    try{const data=await queueLibrary(()=>library.annotations(ctx,{action:"restore",incoming:state.file.annotations,addConflicts:state.addConflicts}));if(!annotationCurrent(ctx))return;
+      annotationItems=data.items;annotationProblem="";annotationBackupState=null;annotationBackupStatus="Restored on this device.";renderAnnotationMarks();
+    }catch(e){if(annotationCurrent(ctx))annotationBackupStatus=annotationBackupError(["DATA","LIMIT","STALE","SOURCE"].includes(e.message)?e.message:"STORAGE");}
+    finally{if(annotationCurrent(ctx)){annotationBackupSetBusy(false);$("#annotationRestoreApply,#annotationExport")?.focus();}}
+  }
+  function renderAnnotationRestore(sheet){
+    const state=annotationBackupState,counts={new:0,duplicate:0,conflict:0};for(const row of state.rows)counts[row.type]++;
+    const adding=counts.new+(state.addConflicts?counts.conflict:0),total=state.existing+adding,limit=total>1000||adding>Number.MAX_SAFE_INTEGER-state.nextId;
+    sheet.appendChild(el("h3",{text:"Restore preview"}));sheet.appendChild(el("p",{text:doc.title+" · "+state.ctx.identity}));
+    sheet.appendChild(el("p",{id:"annotationRestoreCounts",role:"status",text:state.rows.length+" incoming · "+counts.new+" new · "+counts.duplicate+" exact duplicates (skipped) · "+counts.conflict+" conflicts · "+total+" resulting total"}));
+    if(!sourceIdentityStable||!state.ctx.identity.startsWith("generic-v1:"))sheet.appendChild(el("p",{text:"This identity restores only where that exact saved identity already exists; a fresh fallback import is a different book."}));
+    if(counts.conflict){const input=el("input",{id:"annotationRestoreConflicts",type:"checkbox"});input.checked=state.addConflicts;
+      input.onchange=()=>{state.addConflicts=input.checked;renderAnnotations();$("#annotationRestoreConflicts")?.focus();};
+      sheet.appendChild(el("label",{for:input.id},[input," Also add "+counts.conflict+(counts.conflict===1?" entry that differs":" entries that differ")+" at already-annotated spots"]));}
+    if(limit)sheet.appendChild(el("p",{text:annotationBackupError("LIMIT")}));
+    const apply=el("button",{type:"button",id:"annotationRestoreApply",text:adding?"Apply restore":"Nothing to add",onclick:applyAnnotationRestore});apply.disabled=annotationBusy||limit||!adding;sheet.appendChild(apply);
+    sheet.appendChild(el("button",{type:"button",id:"annotationRestoreCancel",text:"Cancel restore",onclick:()=>{annotationBackupState=null;annotationBackupStatus="Restore canceled. No annotations were changed.";renderAnnotations();$("#annotationRestoreFile")?.focus();}}));
+  }
   function renderAnnotations(){
     const sheet=$("#sheet");clear(sheet);sheet.setAttribute("role","dialog");sheet.setAttribute("aria-modal","true");sheet.setAttribute("aria-labelledby","annotationHeading");sheet.appendChild(el("h2",{id:"annotationHeading",text:"Bookmarks, highlights and notes"}));
-    sheet.appendChild(el("p",{id:"annotationStatus",role:"status","aria-live":"polite",text:annotationProblem||"Annotations are saved only on this device."}));
+    sheet.appendChild(el("p",{id:"annotationStatus",role:"status","aria-live":"polite",text:annotationProblem||annotationBackupStatus||"Annotations are saved only on this device."}));
     const editor=annotationEditor;
     if(editor){
       const label=el("input",{id:"annotationLabel",type:"text",autocomplete:"off"}),note=el("textarea",{id:"annotationNote",rows:"5"});label.value=editor.label;note.value=editor.note;
       label.oninput=()=>editor.label=label.value;note.oninput=()=>editor.note=note.value;
       const form=el("form",{},[el("label",{for:"annotationLabel",text:"Label (optional)"}),label,el("label",{for:"annotationNote",text:"Note (optional)"}),note,el("button",{id:"annotationSave",type:"submit",text:"Save"}),el("button",{type:"button",text:"Cancel",onclick:()=>{if(annotationBusy)return;annotationEditor=null;renderAnnotations();}})]);
       form.onsubmit=e=>{e.preventDefault();editor.label=label.value;editor.note=note.value;mutateAnnotation({...editor.op,label:label.value,note:note.value},editor);};sheet.appendChild(form);
+    }else if(annotationBackupState){renderAnnotationRestore(sheet);
     }else{
       for(const [label,kind,id] of [["Add bookmark","bookmark","annotationBookmark"],["Highlight selection","highlight","annotationHighlight"],["Highlight + note","highlight","annotationHighlightNote"]]){const b=el("button",{type:"button",id,text:label,"data-annotation-action":"create",onclick:()=>annotationForm(kind,null,id==="annotationHighlightNote")});b.disabled=!!annotationProblem||annotationBusy;sheet.appendChild(b);}
       if(!annotationItems.length)sheet.appendChild(el("p",{text:"No annotations in this book."}));
@@ -1734,8 +1809,16 @@
         for(const [label,action] of [["Navigate",()=>navigateAnnotation(item)],["Edit",()=>annotationForm(item.kind,item)],["Delete",()=>{if(confirm('Delete '+(item.label||item.kind)+' annotation #'+item.id+'?'))mutateAnnotation({action:"delete",id:item.id,revision:item.revision});}]])row.appendChild(el("button",{type:"button",text:label,"aria-label":label+" "+(item.label||item.kind)+" annotation "+item.id,"data-annotation-action":label,onclick:action}));list.appendChild(row);
       }sheet.appendChild(list);
     }
+    if(!editor){
+      sheet.appendChild(el("button",{type:"button",id:"annotationExport",text:"Export annotations",onclick:exportAnnotationBackup}));
+      const input=el("input",{id:"annotationRestoreFile",type:"file",accept:"application/json,.json"});input.onchange=()=>{const file=input.files[0];if(file)prepareAnnotationRestore(file);};
+      sheet.appendChild(el("label",{for:input.id,text:"Restore annotations from backup"}));sheet.appendChild(input);
+      sheet.appendChild(el("p",{text:"The backup contains notes. Keep it somewhere private. Restore requires the original book already saved here."}));
+    }
     sheet.appendChild(el("button",{type:"button",id:"annotationReload",text:"Reload annotations",onclick:()=>refreshAnnotations()}));
     sheet.appendChild(el("button",{type:"button",id:"annotationClose",text:editor?"Cancel and close":"Close",onclick:()=>{if(!annotationBusy)closeSheet();}}));
+    if(annotationBusy)for(const control of sheet.querySelectorAll("input,textarea,button"))control.disabled=true;
+    else if(annotationProblem)for(const control of sheet.querySelectorAll("#annotationExport,#annotationRestoreFile,#annotationRestoreApply"))control.disabled=true;
   }
   function annotationSheetKey(e){
     if(sheetKind!=="annotations")return false;
@@ -1750,7 +1833,7 @@
     if(kind!=="search"&&kind!=="annotations"){for(const key of ["role","aria-modal","aria-labelledby"])$("#sheet").removeAttribute(key);}
     (kind==="annotations"?renderAnnotations:kind==="search"?renderSearch:kind==="chapters"?renderChapters:renderSettings)();
     $("#scrim").classList.add("on"); $("#sheet").classList.add("on");if(kind==="search")$("#searchQuery").focus();if(kind==="annotations")$("#annotationBookmark,#annotationLabel,#annotationClose")?.focus(); }
-  function closeSheet(){if(sheetKind==="annotations"&&annotationBusy)return; const annotations=sheetKind==="annotations";const search=sheetKind==="search";if(search)cancelSearchScan();comfortSessionAnchor=null; sheetKind=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on");if(search)$("#searchBtn").focus();if(annotations){annotationEditor=null;annotationCapture=null;$("#annotationsBtn").focus();} }
+  function closeSheet(){if(sheetKind==="annotations"&&annotationBusy)return; const annotations=sheetKind==="annotations";const search=sheetKind==="search";if(search)cancelSearchScan();comfortSessionAnchor=null; sheetKind=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on");if(search)$("#searchBtn").focus();if(annotations){annotationEditor=null;annotationCapture=null;annotationBackupState=null;annotationBackupStatus="";$("#annotationsBtn").focus();} }
   $("#searchBtn").onclick=()=>{if(segs.length)openSheet("search");};
   $("#scrim").onclick=closeSheet;
   $("#chaptersBtn").onclick=()=>openSheet("chapters");
