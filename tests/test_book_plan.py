@@ -164,6 +164,17 @@ class BookPlanTests(unittest.TestCase):
         self.assertEqual(self.cli('--plan').returncode, 2)
         self.write(manifest())
         self.assertEqual(self.cli().returncode, 2)
+        self.assertEqual(self.cli('--plan', '--execute').returncode, 2)
+
+    def test_execute_rejects_unsupported_manifest_before_any_stage(self):
+        for changes in ({'tier': 'auto'}, {'boundary_review': {'approved': True}},
+                        {'map': {'confirmed': True}}):
+            self.write({**manifest(), **changes})
+            with patch.object(planner, 'execute', side_effect=AssertionError('invalid manifest reached stages')), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    planner.main([str(self.path), '--execute'])
+                self.assertEqual(error.exception.code, 2)
 
     def test_dynamic_no_execution_or_writes_on_success_and_error(self):
         import builtins
