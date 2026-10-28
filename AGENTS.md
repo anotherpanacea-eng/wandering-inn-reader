@@ -27,6 +27,23 @@ data boundary (CI-enforced leak gate): branch/commit refs, aggregates, and
 whole-artifact hashes only — never corpus prose, per-unit identifiers,
 private machine paths, or keys.
 
+## Fleet backlog
+
+Fleet-wide work items are cards: one JSON file per card,
+`backlog/cards/<ID>.json` on the `fleet-custody-state` branch of
+[fleet-coordination](https://github.com/anotherpanacea-eng/fleet-coordination)
+(its `docs/backlog-state.md` documents them). The fleet board is the cards the
+owner has admitted that sit in build, review or landing. To look an item up,
+read that folder or run `python3 -m tools.backlog_state list` in a
+fleet-coordination checkout; card ids match the old board ids. To propose a new
+item, use the `fleet-intake` skill; a seat without GitHub uses the fleet's
+Dropbox intake folder. Only the owner admits a card. Don't add rows to
+`BURN-DOWN-BOARD.md` or make a `BOARD.md`. This repo's own briefs (specs,
+roadmap items, Issues) work as before, and a card links to them. When a change
+here finishes or moves a card's work, move the card
+(`python3 -m tools.backlog_state move`) or say so in the PR. A card's stage
+never reserves files; a Fleet custody checkout still does.
+
 ## The flow
 
 ```
