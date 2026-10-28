@@ -22,6 +22,8 @@ Each phase produces the existing data contract and is its own `spec → review �
 
 ## Phases
 
+Each phase has a stable goal ID (`WI-G0` to `WI-G4`, under its heading below). Fleet backlog cards name it in their `goal` field, so keep an ID when a heading is renamed and never reuse one.
+
 Current disposition checked 2026-10-07 against main `21c9151`. Phases 0–3 are
 landed; the notes below identify their bounded shipped behavior. This is a
 repository-state reconciliation, not a new browser or device qualification.
@@ -36,6 +38,8 @@ repository-state reconciliation, not a new browser or device qualification.
 
 ### Phase 0 — Generic path: landed
 
+Goal ID: `WI-G0`
+
 The Load flow accepts TXT, bounded Markdown and EPUB 3 through
 `genericDocFromBytes()` into the existing text-only reader projection. EPUB
 admission has explicit archive, package and resource bounds; compressed members
@@ -48,6 +52,8 @@ PDF remains out of scope.
 
 ### Phase 1 — Library: landed
 
+Goal ID: `WI-G1`
+
 The IndexedDB saved-book library has a shelf, covers, import/delete and independent
 per-book segment resume, including migration of the old single-document position.
 [Feature #45](https://github.com/anotherpanacea-eng/wandering-inn-reader/pull/45)
@@ -57,6 +63,8 @@ progress and time-left landed with Phase 3. The saved-book library
 does not establish stable annotation identity for separate audio sessions.
 
 ### Phase 2 — Reading comfort: landed
+
+Goal ID: `WI-G2`
 
 Global persisted settings provide serif/sans font choices, an installed-font
 Dyslexic option with fallback, line-height, margins/measure, justification and
@@ -69,6 +77,8 @@ Chrome, including phone-width viewports; physical iOS/Safari acceptance remains
 unverified.
 
 ### Phase 3 — Wayfinding: landed
+
+Goal ID: `WI-G3`
 
 Local in-book search over `segments[].text`, saved-book bookmarks, highlights and
 local notes (persisted in the Phase 1 IndexedDB store as serialized ranges over
@@ -83,6 +93,9 @@ gate plus headless Chromium probes; physical phone and Safari acceptance remains
 unverified.
 
 ### Phase 4 — AI / generated voice  ⚠️ decision held open
+
+Goal ID: `WI-G4`
+
 Listen to **any** book, including those with no audiobook, reusing the read-along UX.
 **Synergy:** TTS emits word-boundary events as it speaks → word-level alignment *for free*,
 so glow/follow/handoff work on a generated voice exactly like the Parsneau path; the contract
